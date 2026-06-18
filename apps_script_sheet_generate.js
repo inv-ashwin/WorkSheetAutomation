@@ -748,8 +748,10 @@ function setupEmployeeSheet_(ss, empName, dates,projectName) {
 // ======================================================
 
 function sendChatNotification_(projectName, monthName, year, url, testMode = false) {
+  const props = PropertiesService.getScriptProperties();
+  const employeeAlertWebhook = props.getProperty("EMPLOYEE_ALERT_WEBHOOK_URL") || "";
 
-  if (!WEBHOOK_URL) return;
+  if (!employeeAlertWebhook) return;
 
   if (testMode) {
     Logger.log("TEST MODE → Chat notification for " + projectName);
@@ -768,7 +770,7 @@ function sendChatNotification_(projectName, monthName, year, url, testMode = fal
       url
   };
 
-  UrlFetchApp.fetch(WEBHOOK_URL, {
+  UrlFetchApp.fetch(employeeAlertWebhook, {
     method: "post",
     contentType: "application/json",
     payload: JSON.stringify(message)

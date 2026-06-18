@@ -185,9 +185,14 @@ class SheetsVerifier {
         return null;
       }
 
-      // Read and parse config file
+      // Read and parse config file safely
       const configContent = configFile.getBlob().getDataAsString();
-      const config = JSON.parse(configContent);
+      let config = {};
+      try {
+        config = JSON.parse(configContent || "{}");
+      } catch (e) {
+        Logger.log("Warning: Failed to parse config JSON content: " + e + ". Content: '" + configContent + "'");
+      }
 
       // Use targetDate if provided, otherwise use current date
       const dateToUse = targetDate || new Date();
@@ -223,14 +228,34 @@ class SheetsVerifier {
    * Fetch project configuration and engineer chat IDs from Master Config Spreadsheet
    */
   _fetchProjectsFromMasterSheet() {
-    const masterConfigSheetId = this.props.getProperty("MASTER_CONFIG_SHEET_ID");
-    if (!masterConfigSheetId) {
-      Logger.log("WARNING: MASTER_CONFIG_SHEET_ID is not configured in Script Properties");
-      return { projects: {}, employeeChatIds: {}, engineerNames: [] };
+    let ss = null;
+    
+    // Try to use the active spreadsheet (when script is bound to the Master Config Sheet)
+    try {
+      ss = SpreadsheetApp.getActiveSpreadsheet();
+      if (ss && !ss.getSheetByName("Team")) {
+        ss = null; // Not the master config spreadsheet
+      }
+    } catch (e) {
+      ss = null;
+    }
+    
+    // Fall back to opening by MASTER_CONFIG_SHEET_ID script property
+    if (!ss) {
+      const masterConfigSheetId = this.props.getProperty("MASTER_CONFIG_SHEET_ID");
+      if (!masterConfigSheetId) {
+        Logger.log("WARNING: MASTER_CONFIG_SHEET_ID is not configured in Script Properties, and active spreadsheet is not accessible.");
+        return { projects: {}, employeeChatIds: {}, engineerNames: [] };
+      }
+      try {
+        ss = SpreadsheetApp.openById(masterConfigSheetId);
+      } catch (e) {
+        Logger.log("Error opening Master Config Spreadsheet by ID (" + masterConfigSheetId + "): " + e);
+        return { projects: {}, employeeChatIds: {}, engineerNames: [] };
+      }
     }
 
     try {
-      const ss = SpreadsheetApp.openById(masterConfigSheetId);
       const sheet = ss.getSheetByName("Team");
       if (!sheet) {
         Logger.log("WARNING: Sheet 'Team' not found in Master Config Spreadsheet");
@@ -276,13 +301,11 @@ class SheetsVerifier {
           projects[projectName] = {};
         }
 
-        // Map memberName -> chatId (or "2541" default if empty, to match the original structure)
-        projects[projectName][memberName] = chatId || "2541";
+        // Map memberName -> chatId (keep it empty/falsy if not provided)
+        projects[projectName][memberName] = chatId || "";
 
         if (chatId) {
           employeeChatIds[memberName] = chatId;
-        } else {
-          employeeChatIds[memberName] = "2541"; // Default fallback
         }
 
         if (!seenEngineers[memberName]) {
@@ -314,10 +337,10 @@ class SheetsVerifier {
     // Parse engineer names
     let engineerNames = masterConfig.engineerNames;
     if (engineerNames.length === 0) {
-      const engineerNamesStr =
-        props.getProperty("ENGINEER_NAMES") ||
-        "Jinu T J,Bismillakhan S,Midhun,Aravind,Akhil Mohan,Akash T K,Shinoj";
-      engineerNames = engineerNamesStr.split(",").map((n) => n.trim());
+      const engineerNamesStr = props.getProperty("ENGINEER_NAMES");
+      if (engineerNamesStr) {
+        engineerNames = engineerNamesStr.split(",").map((n) => n.trim());
+      }
     }
 
     // Parse employee chat IDs
@@ -1363,15 +1386,13 @@ class SheetsVerifier {
     for (let i = 0; i < employeesToRemind.length; i++) {
       const employee = employeesToRemind[i];
       const chatId = this.config.employeeChatIds[employee];
-      if (chatId) {
+      if (chatId && chatId !== "2541") {
         employeeMentions.push("<users/" + chatId + ">");
       } else {
-        // Fallback to name if no chat ID configured
-        employeeMentions.push(employee);
         Logger.log(
-          "Warning: No chat ID configured for " +
+          "Skipping chat reminder for " +
             employee +
-            ", using name instead",
+            " because no Chat ID is configured.",
         );
       }
     }
@@ -1466,7 +1487,6 @@ function runDailyVerification() {
 function setupConfiguration() {
   const props = PropertiesService.getScriptProperties();
   props.deleteAllProperties();
-  props.setProperty("MASTER_CONFIG_SHEET_ID", "YOUR_MASTER_CONFIG_SHEET_ID");
   props.setProperty("DESTINATION_FOLDER_ID", "YOUR_DESTINATION_FOLDER_ID");
   props.setProperty("PROJECT_KEY", ""); // e.g. "Rapid-Raise" → uses Rapid-Raise_timesheet_config.json in destination folder
   props.setProperty("GOOGLE_CHAT_WEBHOOK_URL", "YOUR_WEBHOOK_URL");
@@ -1490,6 +1510,6 @@ function setupConfiguration() {
   props.setProperty("HOLIDAYS", JSON.stringify(holidays));
 
   Logger.log("\n✓ Configuration set up successfully!");
-  Logger.log("Please define MASTER_CONFIG_SHEET_ID in Script Properties, then run verification.");
+  Logger.log("Please define DESTINATION_FOLDER_ID and Webhook URLs in Script Properties, then run verification.");
 }
 

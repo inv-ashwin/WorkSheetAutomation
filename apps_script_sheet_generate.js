@@ -57,12 +57,31 @@ const TEST_ENV = (
  * FETCH CONFIGURATION FROM MASTER SPREADSHEET
  ************************************************************/
 
-function fetchProjectsConfig() {
-  if (!MASTER_CONFIG_SHEET_ID) {
-    throw new Error("MASTER_CONFIG_SHEET_ID is not configured in Script Properties");
+function fetchProjectsConfig_() {
+  let ss = null;
+  
+  // Try to use the active spreadsheet (when script is bound to the Master Config Sheet)
+  try {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss && !ss.getSheetByName("Team")) {
+      ss = null; // Not the master config spreadsheet (different file open)
+    }
+  } catch (e) {
+    ss = null;
+  }
+  
+  // Fall back to opening by MASTER_CONFIG_SHEET_ID script property
+  if (!ss) {
+    if (!MASTER_CONFIG_SHEET_ID) {
+      throw new Error("MASTER_CONFIG_SHEET_ID is not configured in Script Properties, and active spreadsheet is not accessible.");
+    }
+    try {
+      ss = SpreadsheetApp.openById(MASTER_CONFIG_SHEET_ID);
+    } catch (e) {
+      throw new Error("Failed to open Master Config Spreadsheet by ID (" + MASTER_CONFIG_SHEET_ID + "): " + e.message);
+    }
   }
 
-  const ss = SpreadsheetApp.openById(MASTER_CONFIG_SHEET_ID);
   const sheet = ss.getSheetByName("Team");
   if (!sheet) {
     throw new Error("Sheet 'Team' not found in Master Config Spreadsheet");
@@ -131,7 +150,7 @@ function fetchProjectsConfig() {
  * GRANT ACCESS BASED ON SPREADSHEET EMAILS
  ************************************************************/
 
-function grantProjectAccess(file, emails) {
+function grantProjectAccess_(file, emails) {
   if (!emails || emails.length === 0) {
     Logger.log("⚠ No emails found for sharing.");
     return;
@@ -151,9 +170,9 @@ function grantProjectAccess(file, emails) {
 // HELPER FOR DETECTING EXISTING SPREADSHEETS
 // ======================================================
 
-function getExistingSpreadsheetId(projectName, monthName, year) {
+function getExistingSpreadsheetId_(projectName, monthName, year) {
   try {
-    const configFolder = getOrCreateConfigFolder();
+    const configFolder = getOrCreateConfigFolder_();
     const configFileName = projectName + "_timesheet_config.json";
     const files = configFolder.getFilesByName(configFileName);
     if (files.hasNext()) {
@@ -189,8 +208,8 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
     year = now.getFullYear();
   }
 
-  const dates = getDatesForMonth(monthName, year);
-  const config = fetchProjectsConfig();
+  const dates = getDatesForMonth_(monthName, year);
+  const config = fetchProjectsConfig_();
   const projects = config.projects;
   const projectEmails = config.emails;
 
@@ -206,7 +225,7 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
     let existingId = null;
 
     if (!testMode) {
-      existingId = getExistingSpreadsheetId(projectName, monthName, year);
+      existingId = getExistingSpreadsheetId_(projectName, monthName, year);
       if (existingId) {
         try {
           ss = SpreadsheetApp.openById(existingId);
@@ -226,8 +245,8 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
         });
         const fakeId = "TEST_" + Utilities.getUuid();
         const fakeUrl = "https://docs.google.com/spreadsheets/d/" + fakeId;
-        updateConfigJson(projectName, fakeId, monthName, year, true);
-        sendChatNotification(projectName, monthName, year, fakeUrl, true);
+        updateConfigJson_(projectName, fakeId, monthName, year, true);
+        sendChatNotification_(projectName, monthName, year, fakeUrl, true);
         continue;
       }
 
@@ -247,7 +266,7 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
       const sheet = ss.getSheetByName(emp);
       if (!sheet) {
         Logger.log("Creating new tab for employee: " + emp + " in project " + projectName);
-        setupEmployeeSheet(ss, emp, dates, projectName);
+        setupEmployeeSheet_(ss, emp, dates, projectName);
         newlyAddedEmployees.push(emp);
       } else {
         Logger.log("Tab already exists for employee: " + emp + " (skipping)");
@@ -276,11 +295,11 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
       });
     }
 
-    grantProjectAccess(file, emailsToShare);
-    updateConfigJson(projectName, ss.getId(), monthName, year);
+    grantProjectAccess_(file, emailsToShare);
+    updateConfigJson_(projectName, ss.getId(), monthName, year);
     
     if (isNew) {
-      sendChatNotification(projectName, monthName, year, url);
+      sendChatNotification_(projectName, monthName, year, url);
     } else {
       Logger.log("✓ Existing spreadsheet '" + workbookName + "' updated and shared.");
     }
@@ -293,7 +312,7 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
 // CONFIG FOLDER HANDLING
 // ======================================================
 
-function getOrCreateConfigFolder() {
+function getOrCreateConfigFolder_() {
 
   const parentFolder = DESTINATION_FOLDER_ID
     ? DriveApp.getFolderById(DESTINATION_FOLDER_ID)
@@ -308,9 +327,9 @@ function getOrCreateConfigFolder() {
   return parentFolder.createFolder(CONFIG_FOLDER_NAME);
 }
 
-function updateConfigJson(projectName, spreadsheetId, monthName, year, testMode = false) {
+function updateConfigJson_(projectName, spreadsheetId, monthName, year, testMode = false) {
 
-  const configFolder = getOrCreateConfigFolder();
+  const configFolder = getOrCreateConfigFolder_();
   const configFileName = projectName + "_timesheet_config.json";
   const key = year + "-" + monthName;
 
@@ -346,7 +365,7 @@ function updateConfigJson(projectName, spreadsheetId, monthName, year, testMode 
 // DATE GENERATION
 // ======================================================
 
-function getDatesForMonth(monthName, year) {
+function getDatesForMonth_(monthName, year) {
   Logger.log(monthName)
 
   const monthMap = {
@@ -380,7 +399,7 @@ function getDatesForMonth(monthName, year) {
   return dates;
 }
 
-function isHoliday(dateObj) {
+function isHoliday_(dateObj) {
 
   const formatted = Utilities.formatDate(
     dateObj,
@@ -398,7 +417,7 @@ function isHoliday(dateObj) {
 /**
  * Create and format an individual employee timesheet
  */
-function setupEmployeeSheet(ss, empName, dates,projectName) {
+function setupEmployeeSheet_(ss, empName, dates,projectName) {
   // Create new sheet
   const sheet = ss.insertSheet(empName);
 
@@ -546,7 +565,7 @@ function setupEmployeeSheet(ss, empName, dates,projectName) {
     sheet.getRange(currentRow, 9, 2, 2).setNumberFormat("hh:mm");
 
     // Color weekend rows or holidays
-    if (isWeekend || isHoliday(dateObj)) {
+    if (isWeekend || isHoliday_(dateObj)) {
       sheet.getRange(currentRow, 1, 2, 11).setBackground(WEEKEND_BG);
     }
 
@@ -614,7 +633,7 @@ function setupEmployeeSheet(ss, empName, dates,projectName) {
 // GOOGLE CHAT NOTIFICATION
 // ======================================================
 
-function sendChatNotification(projectName, monthName, year, url, testMode = false) {
+function sendChatNotification_(projectName, monthName, year, url, testMode = false) {
 
   if (!WEBHOOK_URL) return;
 
@@ -642,110 +661,43 @@ function sendChatNotification(projectName, monthName, year, url, testMode = fals
   });
 }
 
+
 // ======================================================
-// MASTER CONFIG SHEET GENERATION UTILITY
+// CUSTOM MENU AUTOMATION
 // ======================================================
 
 /**
- * Creates a styled Master Config Spreadsheet, initializes it with column headers and sample data,
- * and automatically sets its Spreadsheet ID in the Script Properties.
+ * Automatically runs when the spreadsheet is opened.
+ * Adds a custom menu to the spreadsheet UI.
  */
-function createMasterConfigSheet() {
-  const ssName = "Master Timesheet Config";
-  const props = PropertiesService.getScriptProperties();
-  const existingId = props.getProperty("MASTER_CONFIG_SHEET_ID");
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu("Timesheet Automation")
+    .addItem("Generate Monthly Reports", "btnGenerateMonthlyReports_")
+    .addToUi();
+}
+
+/**
+ * Wrapper to run Generate Monthly Reports with verification/production options.
+ */
+function btnGenerateMonthlyReports_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    "Generate Monthly Reports",
+    "Are you sure you want to generate the monthly reports for the current month?\n\nThis will create and share spreadsheets for all active projects and team members.",
+    ui.ButtonSet.YES_NO
+  );
   
-  if (existingId) {
+  if (response === ui.Button.YES) {
+    ss.toast("Generating monthly reports... Please wait.", "Monthly Reports", -1);
     try {
-      const existingSs = SpreadsheetApp.openById(existingId);
-      Logger.log("⚠ A Master Config Sheet already exists at: " + existingSs.getUrl());
-      Logger.log("Spreadsheet ID: " + existingId);
-      Logger.log("Skipping creation. If you want to force-create a new one, delete the 'MASTER_CONFIG_SHEET_ID' key from Script Properties first.");
-      return existingSs.getUrl();
+      createMonthlyTimesheet(null, null, false);
+      ss.toast("Monthly reports generated successfully!", "Success", 5);
+      ui.alert("Success", "Monthly reports generated successfully!", ui.ButtonSet.OK);
     } catch (e) {
-      Logger.log("Could not open existing Master Config Sheet by ID, creating a new one...");
+      ss.toast("Failed to generate monthly reports.", "Error", 5);
+      ui.alert("Error", "Failed to generate monthly reports: " + e.toString(), ui.ButtonSet.OK);
     }
   }
-  
-  // Create a new spreadsheet
-  const ss = SpreadsheetApp.create(ssName);
-  const sheet = ss.getSheets()[0];
-  sheet.setName("Team");
-  
-  // Set column widths
-  sheet.setColumnWidth(1, 150); // Project Name
-  sheet.setColumnWidth(2, 200); // Member Name
-  sheet.setColumnWidth(3, 250); // Email
-  sheet.setColumnWidth(4, 150); // Chat ID
-  sheet.setColumnWidth(5, 100); // Active (Checkbox)
-  
-  // Apply Calibri font to the whole sheet
-  sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).setFontFamily("Calibri");
-  
-  // Set headers
-  const headers = ["Project Name", "Member Name", "Email", "Chat ID", "Active"];
-  const headerRange = sheet.getRange(1, 1, 1, headers.length);
-  headerRange.setValues([headers]);
-  headerRange.setBackground("#FEF2CB") // Golden yellow header background
-             .setFontWeight("bold")
-             .setHorizontalAlignment("center")
-             .setVerticalAlignment("middle")
-             .setFontSize(11);
-  
-  // Add sample rows with checkboxes in Column E
-  const sampleData = [
-    ["Project 1", "member 1", "email@address.com", "123456789", true],
-    ["", "", "", "", false],
-    ["", "", "", "", false],
-    ["", "", "", "", false],
-    ["", "", "", "", false]
-  ];
-  
-  for (let i = 0; i < sampleData.length; i++) {
-    const rowNum = i + 2;
-    // Set text columns (A-D)
-    sheet.getRange(rowNum, 1, 1, 4).setValues([[
-      sampleData[i][0],
-      sampleData[i][1],
-      sampleData[i][2],
-      sampleData[i][3]
-    ]]);
-    
-    // Add checkbox for Column E (Active)
-    const checkboxCell = sheet.getRange(rowNum, 5);
-    checkboxCell.insertCheckboxes();
-    checkboxCell.setValue(sampleData[i][4]);
-  }
-  
-  // Apply borders to header and data rows
-  const borderRange = sheet.getRange(1, 1, sampleData.length + 1, headers.length);
-  borderRange.setBorder(true, true, true, true, true, true);
-  
-  // Set cell alignments
-  sheet.getRange(2, 1, sampleData.length, 4).setHorizontalAlignment("left");
-  sheet.getRange(2, 5, sampleData.length, 1).setHorizontalAlignment("center");
-  
-  // Move sheet to configured destination folder if DESTINATION_FOLDER_ID is set
-  const file = DriveApp.getFileById(ss.getId());
-  const folderId = props.getProperty("DESTINATION_FOLDER_ID");
-  if (folderId) {
-    try {
-      const folder = DriveApp.getFolderById(folderId);
-      file.moveTo(folder);
-      Logger.log("✓ Moved Master Config Sheet to configured destination folder.");
-    } catch (e) {
-      Logger.log("Could not move Master Config Sheet to destination folder: " + e);
-    }
-  }
-  
-  // Save new ID to Script Properties automatically
-  props.setProperty("MASTER_CONFIG_SHEET_ID", ss.getId());
-  
-  Logger.log("\n✓ Master Config Sheet created successfully!");
-  Logger.log("Spreadsheet Name: " + ssName);
-  Logger.log("Spreadsheet URL: " + ss.getUrl());
-  Logger.log("Spreadsheet ID: " + ss.getId());
-  Logger.log("✓ MASTER_CONFIG_SHEET_ID updated in Script Properties.");
-  
-  return ss.getUrl();
 }

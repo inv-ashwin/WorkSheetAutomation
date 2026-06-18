@@ -21,7 +21,15 @@ const ACTIVITY_OPTIONS = [
   "Investigation"
 ];
 
-const HOLIDAY_DATES = [
+const HEADER_BG = "#FEF2CB";
+const WEEKEND_BG = "#FF9999";
+
+const CONFIG_FOLDER_NAME = "Timesheet_Configs";
+
+let DESTINATION_FOLDER_ID = "";
+let WEBHOOK_URL = "";
+let TEST_ENV = false;
+let HOLIDAY_DATES = [
   "2026-01-01",
   "2026-01-26",
   "2026-03-20",
@@ -33,58 +41,145 @@ const HOLIDAY_DATES = [
   "2026-12-25"
 ];
 
-const HEADER_BG = "#FEF2CB";
-const WEEKEND_BG = "#FF9999";
+function syncSettingsFromSheet_() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return;
+    const sheet = ss.getSheetByName("Manager Sheet");
+    if (!sheet) {
+      throw new Error("Sheet 'Manager Sheet' not found in Master Config Spreadsheet. Please create it.");
+    }
+    const values = sheet.getDataRange().getValues();
+    const props = PropertiesService.getScriptProperties();
+    
+    // Map of friendly names / cell labels to script property keys
+    const settingMap = {
+      "Destination Folder ID": "DESTINATION_FOLDER_ID",
+      "Google Chat Webhook": "GOOGLE_CHAT_WEBHOOK_URL",
+      "Employee Alert Webhook": "EMPLOYEE_ALERT_WEBHOOK_URL",
+      "Project Key": "PROJECT_KEY",
+      "Test Mode": "TEST_MODE",
+      "Holidays": "HOLIDAYS",
+      "Rows to Check After Date": "ROWS_TO_CHECK_AFTER_DATE",
+      "Sheet Data Range": "SHEET_DATA_RANGE"
+    };
 
-const CONFIG_FOLDER_NAME = "Timesheet_Configs";
+    // Initialize/reset optional settings in properties to defaults before reading sheet
+    props.setProperty("TEST_MODE", "false");
+    props.setProperty("PROJECT_KEY", "");
 
-const MASTER_CONFIG_SHEET_ID =
-  PropertiesService.getScriptProperties().getProperty("MASTER_CONFIG_SHEET_ID");
+    // Dynamically find settings column headers
+    let keyIdx = 2; // Default to Column C
+    let valIdx = 3; // Default to Column D
+    if (values.length > 2) {
+      const headerRow = values[2]; // Row 3
+      for (let c = 0; c < headerRow.length; c++) {
+        const cellVal = String(headerRow[c] || "").trim().toLowerCase();
+        if (cellVal === "key") keyIdx = c;
+        if (cellVal === "value") valIdx = c;
+      }
+    }
+    
+    // Settings start at row 4 (index 3) and stop at the "Work Sheet Manager" header
+    for (let i = 3; i < values.length; i++) {
+      const name = String(values[i][keyIdx] || "").trim();
+      const valColB = values[i].length > 1 ? String(values[i][1] || "").trim() : "";
+      const valColC = values[i].length > 2 ? String(values[i][2] || "").trim() : "";
+      
+      // Stop if we reach the header of the Work Sheet Manager table
+      if (name.toLowerCase().includes("project name") || 
+          name.toLowerCase().includes("work sheet manager") || 
+          valColB.toLowerCase().includes("work sheet manager") ||
+          valColC.toLowerCase().includes("work sheet manager") ||
+          valColB.toLowerCase().includes("sl no") ||
+          valColC.toLowerCase().includes("sl no")) {
+        break;
+      }
+      
+      const value = String(values[i][valIdx] || "").trim();
+      const propKey = settingMap[name];
+      if (propKey) {
+        if (propKey === "HOLIDAYS") {
+          let holidaysArr = [];
+          if (value) {
+            holidaysArr = value.split(",").map(d => d.trim()).filter(d => d);
+          }
+          props.setProperty("HOLIDAYS", JSON.stringify(holidaysArr));
+        } else {
+          props.setProperty(propKey, value);
+        }
+      }
+    }
+    
+    Logger.log("✓ Settings synced successfully from 'Manager Sheet'.");
+  } catch (e) {
+    Logger.log("Error syncing settings: " + e);
+    throw e;
+  }
+  
+  loadGlobalsFromProperties_();
 
-const DESTINATION_FOLDER_ID =
-  PropertiesService.getScriptProperties().getProperty("DESTINATION_FOLDER_ID");
+  // Validate that required properties are set and do not contain placeholder/default text
+  const props = PropertiesService.getScriptProperties();
+  const dest = props.getProperty("DESTINATION_FOLDER_ID");
+  const managerWebhook = props.getProperty("GOOGLE_CHAT_WEBHOOK_URL");
+  const employeeWebhook = props.getProperty("EMPLOYEE_ALERT_WEBHOOK_URL");
 
-const WEBHOOK_URL =
-  PropertiesService.getScriptProperties().getProperty("WEBHOOK_URL");
+  if (!dest || dest.trim() === "" || dest === "YOUR_DESTINATION_FOLDER_ID") {
+    throw new Error("Missing Destination Folder ID. Please add the folder ID to the settings in your 'Manager Sheet' to generate the sheet.");
+  }
+  if (!managerWebhook || managerWebhook.trim() === "" || managerWebhook === "YOUR_WEBHOOK_URL") {
+    throw new Error("Missing Google Chat Webhook. Please add the webhook URL to the settings in your 'Manager Sheet' to generate the sheet.");
+  }
+  if (!employeeWebhook || employeeWebhook.trim() === "" || employeeWebhook === "YOUR_ALERT_WEBHOOK_URL") {
+    throw new Error("Missing Employee Alert Webhook. Please add the webhook URL to the settings in your 'Manager Sheet' to generate the sheet.");
+  }
+}
 
-const TEST_ENV = (
-  (PropertiesService.getScriptProperties().getProperty("TEST") || "")
-    .toString()
-    .toLowerCase() === "true"
-);
+function loadGlobalsFromProperties_() {
+  const props = PropertiesService.getScriptProperties();
+  DESTINATION_FOLDER_ID = props.getProperty("DESTINATION_FOLDER_ID") || "";
+  WEBHOOK_URL = props.getProperty("GOOGLE_CHAT_WEBHOOK_URL") || "";
+  
+  // Set default values for test mode, ranges and holidays if not already configured
+  if (!props.getProperty("TEST_MODE")) {
+    props.setProperty("TEST_MODE", "false");
+  }
+  TEST_ENV = props.getProperty("TEST_MODE").toLowerCase() === "true";
+  
+  if (!props.getProperty("ROWS_TO_CHECK_AFTER_DATE")) {
+    props.setProperty("ROWS_TO_CHECK_AFTER_DATE", "5");
+  }
+  if (!props.getProperty("SHEET_DATA_RANGE")) {
+    props.setProperty("SHEET_DATA_RANGE", "A1:K150");
+  }
+  
+  let holidaysStr = props.getProperty("HOLIDAYS");
+  if (!holidaysStr) {
+    props.setProperty("HOLIDAYS", JSON.stringify(HOLIDAY_DATES));
+    holidaysStr = JSON.stringify(HOLIDAY_DATES);
+  }
+  
+  try {
+    HOLIDAY_DATES = JSON.parse(holidaysStr);
+  } catch (e) {
+    Logger.log("Error parsing HOLIDAYS from properties: " + e);
+  }
+}
 
 /************************************************************
  * FETCH CONFIGURATION FROM MASTER SPREADSHEET
  ************************************************************/
 
 function fetchProjectsConfig_() {
-  let ss = null;
-  
-  // Try to use the active spreadsheet (when script is bound to the Master Config Sheet)
-  try {
-    ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (ss && !ss.getSheetByName("Team")) {
-      ss = null; // Not the master config spreadsheet (different file open)
-    }
-  } catch (e) {
-    ss = null;
-  }
-  
-  // Fall back to opening by MASTER_CONFIG_SHEET_ID script property
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) {
-    if (!MASTER_CONFIG_SHEET_ID) {
-      throw new Error("MASTER_CONFIG_SHEET_ID is not configured in Script Properties, and active spreadsheet is not accessible.");
-    }
-    try {
-      ss = SpreadsheetApp.openById(MASTER_CONFIG_SHEET_ID);
-    } catch (e) {
-      throw new Error("Failed to open Master Config Spreadsheet by ID (" + MASTER_CONFIG_SHEET_ID + "): " + e.message);
-    }
+    throw new Error("Active spreadsheet is not accessible. Make sure the script is bound to the Master Config Spreadsheet.");
   }
 
-  const sheet = ss.getSheetByName("Team");
+  const sheet = ss.getSheetByName("Manager Sheet");
   if (!sheet) {
-    throw new Error("Sheet 'Team' not found in Master Config Spreadsheet");
+    throw new Error("Sheet 'Manager Sheet' not found in Master Config Spreadsheet");
   }
 
   const values = sheet.getDataRange().getValues();
@@ -92,20 +187,37 @@ function fetchProjectsConfig_() {
   const emails = {};
   const employeeEmails = {};
 
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    if (row.length < 3) continue;
+  // Dynamically find table column headers
+  let projIdx = 2;   // Default to Column C
+  let memberIdx = 3; // Default to Column D
+  let emailIdx = 4;  // Default to Column E
+  let activeIdx = 6; // Default to Column G
 
-    const projectName = (row[0] || "").toString().trim();
-    const memberName = (row[1] || "").toString().trim();
-    const email = (row[2] || "").toString().trim();
+  if (values.length > 10) {
+    const headerRow = values[10]; // Row 11
+    for (let c = 0; c < headerRow.length; c++) {
+      const cellVal = String(headerRow[c] || "").trim().toLowerCase();
+      if (cellVal.includes("project name")) projIdx = c;
+      if (cellVal.includes("team member")) memberIdx = c;
+      if (cellVal.includes("email")) emailIdx = c;
+      if (cellVal.includes("active")) activeIdx = c;
+    }
+  }
+
+  for (let i = 11; i < values.length; i++) {
+    const row = values[i];
+    if (row.length <= Math.max(projIdx, memberIdx)) continue;
+
+    const projectName = (row[projIdx] || "").toString().trim();
+    const memberName = (row[memberIdx] || "").toString().trim();
+    const email = row.length > emailIdx ? (row[emailIdx] || "").toString().trim() : "";
 
     if (!projectName || !memberName) continue;
 
-    // Check active status (Column E / index 4) - default to true if empty/not provided
+    // Check active status - default to true if empty/not provided
     let isActive = true;
-    if (row.length > 4 && row[4] !== undefined && row[4] !== null) {
-      const activeVal = row[4];
+    if (row.length > activeIdx && row[activeIdx] !== undefined && row[activeIdx] !== null) {
+      const activeVal = row[activeIdx];
       if (activeVal === false) {
         isActive = false;
       } else {
@@ -193,6 +305,8 @@ function getExistingSpreadsheetId_(projectName, monthName, year) {
 // ======================================================
 
 function createMonthlyTimesheet(monthName = null, year = null, testMode = true) {
+  // Sync properties from Manager Sheet settings first
+  syncSettingsFromSheet_();
 
   if (arguments.length < 3) {
     testMode = TEST_ENV;

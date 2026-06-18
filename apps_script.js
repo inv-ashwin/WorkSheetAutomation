@@ -228,37 +228,16 @@ class SheetsVerifier {
    * Fetch project configuration and engineer chat IDs from Master Config Spreadsheet
    */
   _fetchProjectsFromMasterSheet() {
-    let ss = null;
-    
-    // Try to use the active spreadsheet (when script is bound to the Master Config Sheet)
-    try {
-      ss = SpreadsheetApp.getActiveSpreadsheet();
-      if (ss && !ss.getSheetByName("Team")) {
-        ss = null; // Not the master config spreadsheet
-      }
-    } catch (e) {
-      ss = null;
-    }
-    
-    // Fall back to opening by MASTER_CONFIG_SHEET_ID script property
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) {
-      const masterConfigSheetId = this.props.getProperty("MASTER_CONFIG_SHEET_ID");
-      if (!masterConfigSheetId) {
-        Logger.log("WARNING: MASTER_CONFIG_SHEET_ID is not configured in Script Properties, and active spreadsheet is not accessible.");
-        return { projects: {}, employeeChatIds: {}, engineerNames: [] };
-      }
-      try {
-        ss = SpreadsheetApp.openById(masterConfigSheetId);
-      } catch (e) {
-        Logger.log("Error opening Master Config Spreadsheet by ID (" + masterConfigSheetId + "): " + e);
-        return { projects: {}, employeeChatIds: {}, engineerNames: [] };
-      }
+      Logger.log("WARNING: Active spreadsheet is not accessible.");
+      return { projects: {}, employeeChatIds: {}, engineerNames: [] };
     }
 
     try {
-      const sheet = ss.getSheetByName("Team");
+      const sheet = ss.getSheetByName("Manager Sheet");
       if (!sheet) {
-        Logger.log("WARNING: Sheet 'Team' not found in Master Config Spreadsheet");
+        Logger.log("WARNING: Sheet 'Manager Sheet' not found in Master Config Spreadsheet");
         return { projects: {}, employeeChatIds: {}, engineerNames: [] };
       }
 
@@ -268,20 +247,37 @@ class SheetsVerifier {
       const seenEngineers = {};
       const engineerNames = [];
 
-      for (let i = 1; i < values.length; i++) {
-        const row = values[i];
-        if (row.length < 2) continue;
+      // Dynamically find table column headers
+      let projIdx = 2;   // Default to Column C
+      let memberIdx = 3; // Default to Column D
+      let chatIdx = 5;   // Default to Column F
+      let activeIdx = 6; // Default to Column G
 
-        const projectName = (row[0] || "").toString().trim();
-        const memberName = (row[1] || "").toString().trim();
-        const chatId = row.length > 3 ? (row[3] || "").toString().trim() : "";
+      if (values.length > 10) {
+        const headerRow = values[10]; // Row 11
+        for (let c = 0; c < headerRow.length; c++) {
+          const cellVal = String(headerRow[c] || "").trim().toLowerCase();
+          if (cellVal.includes("project name")) projIdx = c;
+          if (cellVal.includes("team member")) memberIdx = c;
+          if (cellVal.includes("chat id")) chatIdx = c;
+          if (cellVal.includes("active")) activeIdx = c;
+        }
+      }
+
+      for (let i = 11; i < values.length; i++) {
+        const row = values[i];
+        if (row.length <= Math.max(projIdx, memberIdx)) continue;
+
+        const projectName = (row[projIdx] || "").toString().trim();
+        const memberName = (row[memberIdx] || "").toString().trim();
+        const chatId = row.length > chatIdx ? (row[chatIdx] || "").toString().trim() : "";
 
         if (!projectName || !memberName) continue;
 
-        // Check active status (Column E / index 4) - default to true if empty/not provided
+        // Check active status - default to true if empty/not provided
         let isActive = true;
-        if (row.length > 4 && row[4] !== undefined && row[4] !== null) {
-          const activeVal = row[4];
+        if (row.length > activeIdx && row[activeIdx] !== undefined && row[activeIdx] !== null) {
+          const activeVal = row[activeIdx];
           if (activeVal === false) {
             isActive = false;
           } else {
@@ -1475,6 +1471,9 @@ class SheetsVerifier {
  * This can be called manually or set up as a time-driven trigger
  */
 function runDailyVerification() {
+  if (typeof syncSettingsFromSheet_ === "function") {
+    syncSettingsFromSheet_();
+  }
   const verifier = new SheetsVerifier();
   const results = verifier.runDailyVerification();
   return results;

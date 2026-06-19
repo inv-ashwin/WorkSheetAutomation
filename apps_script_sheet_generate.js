@@ -358,9 +358,7 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
           Logger.log("TEST MODE → Would create tab: " + emp);
         });
         const fakeId = "TEST_" + Utilities.getUuid();
-        const fakeUrl = "https://docs.google.com/spreadsheets/d/" + fakeId;
         updateConfigJson_(projectName, fakeId, monthName, year, true);
-        sendChatNotification_(projectName, monthName, year, fakeUrl, true);
         continue;
       }
 
@@ -413,7 +411,7 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
     updateConfigJson_(projectName, ss.getId(), monthName, year);
     
     if (isNew) {
-      sendChatNotification_(projectName, monthName, year, url);
+      Logger.log("✓ New spreadsheet '" + workbookName + "' created and shared.");
     } else {
       Logger.log("✓ Existing spreadsheet '" + workbookName + "' updated and shared.");
     }
@@ -743,39 +741,7 @@ function setupEmployeeSheet_(ss, empName, dates,projectName) {
   Logger.log("✓ " + empName + " completed (" + dates.length + " dates)");
 }
 
-// ======================================================
-// GOOGLE CHAT NOTIFICATION
-// ======================================================
 
-function sendChatNotification_(projectName, monthName, year, url, testMode = false) {
-  const props = PropertiesService.getScriptProperties();
-  const employeeAlertWebhook = props.getProperty("EMPLOYEE_ALERT_WEBHOOK_URL") || "";
-
-  if (!employeeAlertWebhook) return;
-
-  if (testMode) {
-    Logger.log("TEST MODE → Chat notification for " + projectName);
-    return;
-  }
-
-  const message = {
-    text:
-      "<users/all> " +
-      projectName +
-      " Timesheet for " +
-      monthName +
-      " " +
-      year +
-      " generated.\n" +
-      url
-  };
-
-  UrlFetchApp.fetch(employeeAlertWebhook, {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify(message)
-  });
-}
 
 
 // ======================================================
@@ -790,6 +756,7 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu("Timesheet Automation")
     .addItem("Generate Monthly Reports", "btnGenerateMonthlyReports_")
+    .addItem("Run Daily Verification", "btnRunDailyVerification_")
     .addToUi();
 }
 
@@ -814,6 +781,31 @@ function btnGenerateMonthlyReports_() {
     } catch (e) {
       ss.toast("Failed to generate monthly reports.", "Error", 5);
       ui.alert("Error", "Failed to generate monthly reports: " + e.toString(), ui.ButtonSet.OK);
+    }
+  }
+}
+
+/**
+ * Wrapper to run Daily Verification.
+ */
+function btnRunDailyVerification_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    "Run Daily Verification",
+    "Are you sure you want to run the daily timesheet verification right now?\n\nThis will scan employee timesheets and send any missing summaries/reminders.",
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (response === ui.Button.YES) {
+    ss.toast("Running daily verification... Please wait.", "Daily Verification", -1);
+    try {
+      runDailyVerification();
+      ss.toast("Daily verification run completed!", "Success", 5);
+      ui.alert("Success", "Daily verification completed successfully!", ui.ButtonSet.OK);
+    } catch (e) {
+      ss.toast("Failed to run daily verification.", "Error", 5);
+      ui.alert("Error", "Failed to run daily verification: " + e.toString(), ui.ButtonSet.OK);
     }
   }
 }

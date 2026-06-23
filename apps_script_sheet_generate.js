@@ -57,7 +57,6 @@ function syncSettingsFromSheet_() {
       "Destination Folder ID": "DESTINATION_FOLDER_ID",
       "Google Chat Webhook": "GOOGLE_CHAT_WEBHOOK_URL",
       "Employee Alert Webhook": "EMPLOYEE_ALERT_WEBHOOK_URL",
-      "Project Key": "PROJECT_KEY",
       "Test Mode": "TEST_MODE",
       "Holidays": "HOLIDAYS",
       "Rows to Check After Date": "ROWS_TO_CHECK_AFTER_DATE",
@@ -66,7 +65,6 @@ function syncSettingsFromSheet_() {
 
     // Initialize/reset optional settings in properties to defaults before reading sheet
     props.setProperty("TEST_MODE", "false");
-    props.setProperty("PROJECT_KEY", "");
 
     // Dynamically find settings column headers
     let keyIdx = 2; // Default to Column C

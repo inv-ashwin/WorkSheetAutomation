@@ -31,7 +31,6 @@
  * - HOLIDAYS: JSON array of holiday dates in YYYY-MM-DD format
  * - ROWS_TO_CHECK_AFTER_DATE: Number of rows to check after finding a date (default: 5)
  * - CONFIG_FILE_ID: (Optional/Legacy) ID of timesheet_config.json file in Google Drive
- * - PROJECT_KEY: (Optional/Legacy) Project key for per-project config (e.g. Rapid-Raise)
  * - MAIN_SPREADSHEET_ID: (Fallback) The main spreadsheet ID - used if config file or master config not found
  * - ENGINEER_NAMES: (Fallback) Comma-separated list of engineer names
  * - EMPLOYEE_CHAT_IDS: (Fallback) JSON object mapping employee names to chat IDs
@@ -426,12 +425,9 @@ class SheetsVerifier {
       Logger.log("Error parsing HOLIDAYS: " + e);
     }
 
-    // Project key for per-project config: {projectKey}_timesheet_config.json (e.g. Rapid-Raise_timesheet_config.json)
-    const projectKey = props.getProperty("PROJECT_KEY") || null;
-
-    // Get spreadsheet ID for current month from config file (uses project's config when PROJECT_KEY is set)
+    // Get spreadsheet ID for current month from config file
     // When PROJECTS is set, also try first project's spreadsheet as fallback for iteration
-    let mainSpreadsheetId = this._getCurrentMonthSpreadsheetId(projectKey);
+    let mainSpreadsheetId = this._getCurrentMonthSpreadsheetId(null);
     if (!mainSpreadsheetId && Object.keys(projects).length > 0) {
       const firstProjectKey = Object.keys(projects)[0];
       mainSpreadsheetId = this._getCurrentMonthSpreadsheetId(firstProjectKey);
@@ -454,7 +450,7 @@ class SheetsVerifier {
 
     return {
       mainSpreadsheetId: mainSpreadsheetId,
-      projectKey: projectKey,
+      projectKey: null,
       projects: projects,
       engineerNames: engineerNames,
       googleChatWebhookUrl: props.getProperty("GOOGLE_CHAT_WEBHOOK_URL"),
@@ -1487,7 +1483,6 @@ function setupConfiguration() {
   const props = PropertiesService.getScriptProperties();
   props.deleteAllProperties();
   props.setProperty("DESTINATION_FOLDER_ID", "YOUR_DESTINATION_FOLDER_ID");
-  props.setProperty("PROJECT_KEY", ""); // e.g. "Rapid-Raise" → uses Rapid-Raise_timesheet_config.json in destination folder
   props.setProperty("GOOGLE_CHAT_WEBHOOK_URL", "YOUR_WEBHOOK_URL");
   props.setProperty("EMPLOYEE_ALERT_WEBHOOK_URL", "YOUR_ALERT_WEBHOOK_URL");
   props.setProperty("TEST_MODE", "false");

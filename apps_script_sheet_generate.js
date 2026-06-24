@@ -66,6 +66,8 @@ function syncSettingsFromSheet_() {
     // Initialize/reset optional settings in properties to defaults before reading sheet
     props.setProperty("TEST_MODE", "false");
 
+    const seenPropKeys = {};
+
     // Dynamically find settings column headers
     let keyIdx = 2; // Default to Column C
     let valIdx = 3; // Default to Column D
@@ -97,17 +99,28 @@ function syncSettingsFromSheet_() {
       const value = String(values[i][valIdx] || "").trim();
       const propKey = settingMap[name];
       if (propKey) {
+        seenPropKeys[propKey] = true;
         if (propKey === "HOLIDAYS") {
           let holidaysArr = [];
           if (value) {
             holidaysArr = value.split(",").map(d => d.trim()).filter(d => d);
+            props.setProperty("HOLIDAYS", JSON.stringify(holidaysArr));
+          } else {
+            props.deleteProperty("HOLIDAYS");
           }
-          props.setProperty("HOLIDAYS", JSON.stringify(holidaysArr));
         } else {
           props.setProperty(propKey, value);
         }
       }
     }
+
+    // Delete any properties from settingMap that were not present in the sheet settings
+    const allPropKeys = Object.keys(settingMap).map(k => settingMap[k]);
+    allPropKeys.forEach(propKey => {
+      if (!seenPropKeys[propKey]) {
+        props.deleteProperty(propKey);
+      }
+    });
     
     Logger.log("✓ Settings synced successfully from 'Manager Sheet'.");
   } catch (e) {

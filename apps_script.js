@@ -401,7 +401,7 @@ class SheetsVerifier {
     let holidays = [];
     try {
       const holidaysStr = props.getProperty("HOLIDAYS");
-      if (holidaysStr) {
+      if (holidaysStr && JSON.parse(holidaysStr).length > 0) {
         holidays = JSON.parse(holidaysStr);
       } else {
         // Default holidays for 2025

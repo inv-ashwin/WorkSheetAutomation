@@ -109,6 +109,7 @@ class SheetsVerifier {
       let chatIdx = 4;     // Default to Column E
       let sheetIdIdx = 5;  // Default to Column F
       let activeIdx = 6;   // Default to Column G
+      let templateIdx = -1;
 
       if (values.length > 10) {
         const headerRow = values[10]; // Row 11
@@ -120,6 +121,7 @@ class SheetsVerifier {
           if (cellVal.includes("chat id") || cellVal.includes("chatid")) chatIdx = c;
           if (cellVal.includes("sheet id") || cellVal.includes("sheetid")) sheetIdIdx = c;
           if (cellVal.includes("active")) activeIdx = c;
+          if (cellVal.includes("template type") || cellVal.includes("template")) templateIdx = c;
         }
       }
 
@@ -132,6 +134,12 @@ class SheetsVerifier {
         const email = row.length > emailIdx ? (row[emailIdx] || "").toString().trim() : "";
         const chatId = row.length > chatIdx ? (row[chatIdx] || "").toString().trim() : "";
         const sheetId = row.length > sheetIdIdx ? (row[sheetIdIdx] || "").toString().trim() : "";
+        const templateTypeRaw = templateIdx !== -1 && row.length > templateIdx ? (row[templateIdx] || "").toString().trim().toLowerCase() : "standard";
+
+        let templateType = "Standard";
+        if (templateTypeRaw === "alternative" || templateTypeRaw === "alt" || templateTypeRaw === "template 2" || templateTypeRaw === "template2") {
+          templateType = "Alternative";
+        }
 
         if (!memberName) continue;
 
@@ -159,7 +167,8 @@ class SheetsVerifier {
           email: email,
           chatId: chatId,
           sheetId: sheetId,
-          projectName: projectName
+          projectName: projectName,
+          templateType: templateType
         });
       }
 
@@ -778,6 +787,188 @@ class SheetsVerifier {
   }
 
   /**
+   * Parse last working day entries from sheet data for Alternative Template
+   */
+  parseAlternativeLastWorkingDayEntries(sheetData, targetDate) {
+    if (!sheetData || sheetData.length < 2) {
+      return [];
+    }
+
+    // Normalize target date to "d-MMM" format
+    const normalizedTargetDate = this._normalizeDate(targetDate);
+    if (!normalizedTargetDate) {
+      Logger.log("Error: Could not normalize target date: " + targetDate);
+      return [];
+    }
+
+    Logger.log("[Alternative] Looking for normalized target date: " + normalizedTargetDate);
+
+    // Find header row (look for 'Date' in column B, index 1)
+    let headerRow = null;
+    for (let i = 0; i < sheetData.length; i++) {
+      const row = sheetData[i];
+      if (row.length > 1 && String(row[1]).indexOf("Date") !== -1) {
+        headerRow = i;
+        break;
+      }
+    }
+
+    if (headerRow === null) {
+      Logger.log("[Alternative] Could not find header row with 'Date' in column B");
+      return [];
+    }
+
+    // Extract entries for the target date and next configurable rows
+    const targetEntries = [];
+    let i = headerRow + 1;
+
+    while (i < sheetData.length) {
+      const row = sheetData[i];
+      if (row.length === 0) {
+        i++;
+        continue;
+      }
+
+      // Check if this row has the target date in column B (index 1)
+      const dateCellValue = row.length > 1 ? row[1] : null;
+      const normalizedDateCell = this._normalizeDate(dateCellValue);
+
+      // Compare normalized dates
+      if (normalizedDateCell && normalizedDateCell === normalizedTargetDate) {
+        Logger.log(
+          "[Alternative] Found target date '" +
+            normalizedTargetDate +
+            "' (original: " +
+            dateCellValue +
+            ") at row " +
+            (i + 1) +
+            " (column B)",
+        );
+
+        // Parse this row and the next configurable rows for all tasks on this date
+        const rowsToCheck = this.config.rowsToCheckAfterDate + 1; // +1 to include the current row
+
+        // First, check if the first row has total_duration (merged cell case in Col K, index 10)
+        const firstRow = sheetData[i];
+        let mergedTotalDuration = "";
+        if (firstRow.length > 10) {
+          mergedTotalDuration = this._normalizeTime(firstRow[10]);
+        }
+
+        for (let j = i; j < Math.min(i + rowsToCheck, sheetData.length); j++) {
+          const taskRow = sheetData[j];
+          if (taskRow.length === 0) {
+            continue;
+          }
+
+          // Skip if this is another date row (unless it's the first one)
+          if (j > i && taskRow.length > 1) {
+            const nextDateCellValue = taskRow[1];
+            const normalizedNextDate = this._normalizeDate(nextDateCellValue);
+            if (
+              normalizedNextDate &&
+              normalizedNextDate !== normalizedTargetDate
+            ) {
+              Logger.log(
+                "  [Alternative] Found new date at row " +
+                  (j + 1) +
+                  " (" +
+                  normalizedNextDate +
+                  "), stopping task collection",
+              );
+              break;
+            }
+            // Also check if it looks like a date string (has numbers)
+            const nextDateStr = String(nextDateCellValue).trim();
+            if (
+              nextDateStr.length > 0 &&
+              /[0-9]/.test(nextDateStr) &&
+              !normalizedNextDate
+            ) {
+              Logger.log(
+                "  [Alternative] Found potential new date at row " +
+                  (j + 1) +
+                  ", stopping task collection",
+              );
+              break;
+            }
+          }
+
+          // Parse the task data according to alternative column structure
+          const entry = {
+            row_number: j + 1,
+            date: normalizedTargetDate,
+            module_area: taskRow.length > 3 ? String(taskRow[3]) : "",
+            task_details: taskRow.length > 4 ? String(taskRow[4]) : "",
+            status: taskRow.length > 6 ? String(taskRow[6]) : "",
+            activity_type: "Task", // Alternative doesn't have Activity Type, default to Task
+            start_time:
+              taskRow.length > 7 ? this._normalizeTime(taskRow[7]) : "",
+            end_time: taskRow.length > 8 ? this._normalizeTime(taskRow[8]) : "",
+            total_duration:
+              taskRow.length > 10 ? this._normalizeTime(taskRow[10]) : "",
+            remarks: taskRow.length > 11 ? String(taskRow[11]) : "",
+          };
+
+          // If this entry doesn't have total_duration but we found it in merged cell, use it
+          if (!entry.total_duration.trim() && mergedTotalDuration) {
+            entry.total_duration = mergedTotalDuration;
+          }
+
+          // Only add entries that have meaningful task details
+          if (entry.task_details.trim() || entry.module_area.trim()) {
+            targetEntries.push(entry);
+            Logger.log(
+              "  [Alternative] Added task from row " +
+                (j + 1) +
+                ": " +
+                entry.task_details.substring(0, 50) +
+                "...",
+            );
+          } else if (
+            entry.start_time.trim() &&
+            entry.end_time.trim() &&
+            targetEntries.length > 0
+          ) {
+            // This indicates additional time for the previous task
+            const previousEntry = targetEntries[targetEntries.length - 1];
+            const additionalEntry = {
+              row_number: entry.row_number,
+              date: entry.date,
+              module_area: previousEntry.module_area,
+              task_details: previousEntry.task_details,
+              status: previousEntry.status,
+              activity_type: previousEntry.activity_type,
+              start_time: entry.start_time,
+              end_time: entry.end_time,
+              total_duration: entry.total_duration,
+              remarks: entry.remarks,
+            };
+            targetEntries.push(additionalEntry);
+            Logger.log(
+              "  [Alternative] Added additional time entry from row " +
+                (j + 1) +
+                " for previous task: " +
+                previousEntry.task_details.substring(0, 50) +
+                "...",
+            );
+          }
+        }
+        break; // found and parsed the date, stop search
+      }
+      i++;
+    }
+
+    Logger.log(
+      "[Alternative] Total entries found for " +
+        normalizedTargetDate +
+        ": " +
+        targetEntries.length,
+    );
+    return targetEntries;
+  }
+
+  /**
    * Generate formatted analysis message from timesheet entries
    */
   generateAnalysisMessage(employeeName, lastDayEntries) {
@@ -970,10 +1161,19 @@ class SheetsVerifier {
         lastWorkingDayMonth,
         spreadsheetId,
       );
-      const lastDayEntries = this.parseLastWorkingDayEntries(
-        sheetData,
-        lastWorkingDay,
-      );
+      const templateType = emp.templateType || "Standard";
+      let lastDayEntries = [];
+      if (templateType === "Alternative") {
+        lastDayEntries = this.parseAlternativeLastWorkingDayEntries(
+          sheetData,
+          lastWorkingDay,
+        );
+      } else {
+        lastDayEntries = this.parseLastWorkingDayEntries(
+          sheetData,
+          lastWorkingDay,
+        );
+      }
 
       Logger.log(
         "Found " +

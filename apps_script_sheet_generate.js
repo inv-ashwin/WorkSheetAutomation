@@ -205,6 +205,7 @@ function fetchEmployeesConfig_() {
   let chatIdx = 4;     // Default to Column E
   let sheetIdIdx = 5;  // Default to Column F
   let activeIdx = 6;   // Default to Column G
+  let templateIdx = -1;
 
   if (values.length > 10) {
     const headerRow = values[10]; // Row 11
@@ -216,6 +217,7 @@ function fetchEmployeesConfig_() {
       if (cellVal.includes("chat id") || cellVal.includes("chatid")) chatIdx = c;
       if (cellVal.includes("sheet id") || cellVal.includes("sheetid")) sheetIdIdx = c;
       if (cellVal.includes("active")) activeIdx = c;
+      if (cellVal.includes("template type") || cellVal.includes("template")) templateIdx = c;
     }
   }
 
@@ -228,6 +230,12 @@ function fetchEmployeesConfig_() {
     const email = row.length > emailIdx ? (row[emailIdx] || "").toString().trim() : "";
     const chatId = row.length > chatIdx ? (row[chatIdx] || "").toString().trim() : "";
     const sheetId = row.length > sheetIdIdx ? (row[sheetIdIdx] || "").toString().trim() : "";
+    const templateTypeRaw = templateIdx !== -1 && row.length > templateIdx ? (row[templateIdx] || "").toString().trim().toLowerCase() : "standard";
+    
+    let templateType = "Standard";
+    if (templateTypeRaw === "alternative" || templateTypeRaw === "alt" || templateTypeRaw === "template 2" || templateTypeRaw === "template2") {
+      templateType = "Alternative";
+    }
 
     if (!memberName) continue;
 
@@ -256,6 +264,7 @@ function fetchEmployeesConfig_() {
       chatId: chatId,
       sheetId: sheetId,
       projectName: projectName,
+      templateType: templateType,
       rowNum: i + 1, // 1-indexed row number
       sheetIdColNum: sheetIdIdx + 1 // 1-indexed column number
     });
@@ -356,8 +365,10 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
 
     const tab = ss.getSheetByName(tabName);
     if (!tab) {
-      Logger.log("Creating new tab: " + tabName + " for employee: " + emp.name);
-      setupEmployeeSheet_(ss, tabName, dates, emp.name, emp.projectName);
+      const templateType = emp.templateType || "Standard";
+      const handler = TimesheetTemplates[templateType] || TimesheetTemplates["Standard"];
+      Logger.log("Creating new tab: " + tabName + " for employee: " + emp.name + " using template: " + templateType);
+      handler.setupSheet(ss, tabName, dates, emp.name, emp.projectName);
     } else {
       Logger.log("Tab " + tabName + " already exists for employee: " + emp.name + " (skipping)");
     }
@@ -437,7 +448,7 @@ function isHoliday_(dateObj) {
 /**
  * Create and format an individual employee timesheet
  */
-function setupEmployeeSheet_(ss, tabName, dates, empName, projectName) {
+function setupStandardEmployeeSheet_(ss, tabName, dates, empName, projectName) {
   // Create new sheet
   const sheet = ss.insertSheet(tabName);
 
@@ -762,4 +773,297 @@ function parseSheetDate_(name) {
   const year = parseInt(parts[1], 10);
   if (month === undefined || isNaN(year)) return null;
   return new Date(year, month, 1);
+}
+
+// ======================================================
+// TEMPLATE STRATEGY REGISTRY
+// ======================================================
+
+const TimesheetTemplates = {
+  "Standard": {
+    setupSheet: function(ss, tabName, dates, empName, projectName) {
+      setupStandardEmployeeSheet_(ss, tabName, dates, empName, projectName);
+    }
+  },
+  "Alternative": {
+    setupSheet: function(ss, tabName, dates, empName, projectName) {
+      setupAlternativeEmployeeSheet_(ss, tabName, dates, empName, projectName);
+    }
+  }
+};
+
+// ======================================================
+// ALTERNATIVE SHEET FORMATTER
+// ======================================================
+
+function setupAlternativeEmployeeSheet_(ss, tabName, dates, empName, projectName) {
+  // Create new sheet
+  const sheet = ss.insertSheet(tabName);
+
+  // Set column widths
+  sheet.setColumnWidth(1, 30); // A
+  sheet.setColumnWidth(2, 80); // B - Date
+  sheet.setColumnWidth(3, 80); // C - Day
+  sheet.setColumnWidth(4, 400); // D - Module/Area
+  sheet.setColumnWidth(5, 400); // E - Task details
+  sheet.setColumnWidth(6, 400); // F - Backlog URL
+  sheet.setColumnWidth(7, 100); // G - Status
+  sheet.setColumnWidth(8, 70); // H - Start
+  sheet.setColumnWidth(9, 70); // I - End
+  sheet.setColumnWidth(10, 70); // J - Task
+  sheet.setColumnWidth(11, 70); // K - Total
+  sheet.setColumnWidth(12, 420); // L - Remarks
+
+  // Set Calibri font for the whole sheet
+  sheet
+    .getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns())
+    .setFontFamily("Calibri");
+
+  // Calculate working days & period
+  let workingDays = 0;
+  dates.forEach(function (dateInfo) {
+    if (!dateInfo.isWeekend && !isHoliday_(dateInfo.dateObj)) {
+      workingDays++;
+    }
+  });
+  const standardHours = workingDays * 8;
+
+  const firstDate = dates[0].dateObj;
+  const lastDate = dates[dates.length - 1].dateObj;
+  const periodStr = Utilities.formatDate(firstDate, Session.getScriptTimeZone(), "yyyy/MM/dd") + " ~ " + Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "yyyy/MM/dd");
+
+  // Row 2: Title Headers
+  sheet.getRange("B2:C2").merge();
+  sheet.getRange("B2").setValue("Work Report")
+    .setBackground("#1a73e8")
+    .setFontColor("white")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle");
+
+  sheet.getRange("D2").setValue("ProjectName:").setBackground("#ffe0b2").setFontWeight("bold").setHorizontalAlignment("center");
+  sheet.getRange("E2").setValue("Engineer Name").setBackground("#ffe0b2").setFontWeight("bold").setHorizontalAlignment("center");
+  sheet.getRange("F2").setValue("Work reporting period").setBackground("#ffe0b2").setFontWeight("bold").setHorizontalAlignment("center");
+  sheet.getRange("G2").setValue("Standard").setBackground("#ffe0b2").setFontWeight("bold").setHorizontalAlignment("center");
+
+  sheet.getRange("H2:K2").merge();
+  sheet.getRange("H2").setValue("Total Work")
+    .setBackground("#2e7d32")
+    .setFontColor("white")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle");
+
+  // Row 3: Title Values
+  sheet.getRange("D3").setValue(projectName || "").setHorizontalAlignment("center");
+  sheet.getRange("E3").setValue(empName).setHorizontalAlignment("center");
+  sheet.getRange("F3").setValue(periodStr).setHorizontalAlignment("center");
+  sheet.getRange("G3").setValue(standardHours).setHorizontalAlignment("center");
+
+  const startRow = 6;
+  const endRow = 5 + (dates.length * 2);
+  sheet.getRange("H3:K3").merge();
+  sheet.getRange("H3").setFormula("=SUM(K" + startRow + ":K" + endRow + ")")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle");
+
+  // Align Title Row heights
+  sheet.setRowHeight(2, 25);
+  sheet.setRowHeight(3, 25);
+
+  // Row 4 & 5: Table Headers
+  const mainHeaders = [
+    "",
+    "Date",
+    "Day",
+    "Module/Area",
+    "Task details",
+    "Backlog URL",
+    "Status",
+    "",
+    "",
+    "",
+    "",
+    "Remarks",
+  ];
+  sheet
+    .getRange(4, 1, 1, mainHeaders.length)
+    .setValues([mainHeaders])
+    .setBackground("#ffe0b2")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle")
+    .setFontSize(12);
+
+  // Merge cells for "Time" header (columns H-I)
+  sheet.getRange(4, 8, 1, 2).merge();
+  sheet.getRange(4, 8).setValue("Time");
+
+  // Merge cells for "Duration" header (columns J-K)
+  sheet.getRange(4, 10, 1, 2).merge();
+  sheet.getRange(4, 10).setValue("Duration");
+
+  // Row 5: Sub-headers for Time and Duration
+  const subHeaders = [
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "Start",
+    "End",
+    "Task",
+    "Total",
+    "",
+  ];
+  sheet
+    .getRange(5, 1, 1, subHeaders.length)
+    .setValues([subHeaders])
+    .setBackground("#ffe0b2")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle")
+    .setFontSize(12);
+
+  // Merge non-time/duration columns vertically (rows 4-5)
+  [2, 3, 4, 5, 6, 7, 12].forEach(col => {
+    sheet.getRange(4, col, 2, 1).merge();
+  });
+
+  // Align header row heights
+  sheet.setRowHeight(4, 20);
+  sheet.setRowHeight(5, 20);
+
+  // Data rows
+  let currentRow = 6;
+
+  dates.forEach(function (dateInfo) {
+    const dateStr = dateInfo.date;
+    const isWeekend = dateInfo.isWeekend;
+    const dateObj = dateInfo.dateObj;
+    
+    // Get Day Name (Mon, Tue, Wed...)
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const dayName = days[dateObj.getDay()];
+
+    // Merge date cells vertically (2 rows) and center align
+    const dateRange = sheet.getRange(currentRow, 2, 2, 1);
+    dateRange.merge();
+    dateRange
+      .setValue(dateStr)
+      .setHorizontalAlignment("center")
+      .setVerticalAlignment("middle");
+
+    // Merge day cells vertically (2 rows) and center align
+    const dayRange = sheet.getRange(currentRow, 3, 2, 1);
+    dayRange.merge();
+    dayRange
+      .setValue(dayName)
+      .setHorizontalAlignment("center")
+      .setVerticalAlignment("middle");
+
+    // Add task duration formulas for both rows (Col J - index 10)
+    for (let offset = 0; offset < 2; offset++) {
+      const row = currentRow + offset;
+      const taskFormula =
+        "=IF(AND(H" +
+        row +
+        "<TIME(12,30,0),I" +
+        row +
+        ">TIME(13,0,0)),I" +
+        row +
+        "-H" +
+        row +
+        "-TIME(0,30,0),I" +
+        row +
+        "-H" +
+        row +
+        ")";
+      sheet.getRange(row, 10).setFormula(taskFormula);
+      
+      // Default Start & End to 00:00
+      sheet.getRange(row, 8).setValue("00:00");
+      sheet.getRange(row, 9).setValue("00:00");
+    }
+
+    // Add total formula in first row only (sums both task rows) and merge vertically (Col K - index 11)
+    const totalFormula = "=SUM(J" + currentRow + ":J" + (currentRow + 1) + ")";
+    const totalRange = sheet.getRange(currentRow, 11, 2, 1);
+    totalRange.merge();
+    totalRange
+      .setFormula(totalFormula)
+      .setHorizontalAlignment("center")
+      .setVerticalAlignment("middle")
+      .setFontWeight("bold")
+      .setFontSize(11);
+
+    // Format Start and End as clock time
+    sheet.getRange(currentRow, 8, 2, 2).setNumberFormat("hh:mm");
+
+    // Format Task and Total as duration hh:mm
+    sheet.getRange(currentRow, 10, 2, 2).setNumberFormat("hh:mm");
+
+    // Color weekend rows or holidays
+    if (isWeekend || isHoliday_(dateObj)) {
+      sheet.getRange(currentRow, 1, 2, 12).setBackground(WEEKEND_BG);
+    }
+
+    // Add data validation for Status (column G)
+    const statusRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(STATUS_OPTIONS, true)
+      .setAllowInvalid(false)
+      .build();
+    sheet.getRange(currentRow, 7, 2, 1).setDataValidation(statusRule);
+
+    currentRow += 2;
+  });
+
+  const lastDataRow = currentRow - 1;
+
+  // Add "Monthly hours spend" row
+  const monthlyRow = currentRow + 1;
+  sheet.getRange(monthlyRow, 2, 1, 9).merge();
+  sheet
+    .getRange(monthlyRow, 2)
+    .setValue("Monthly hours spend")
+    .setFontWeight("bold")
+    .setHorizontalAlignment("right")
+    .setVerticalAlignment("middle");
+
+  // Monthly total formula in Column K (Col 11)
+  const monthlyFormula =
+    "=TEXT(INT(SUM(K6:K" +
+    lastDataRow +
+    "))*24+HOUR(SUM(K6:K" +
+    lastDataRow +
+    ')),"00")&":"&' +
+    "TEXT(MINUTE(SUM(K6:K" +
+    lastDataRow +
+    ')),"00")';
+  sheet
+    .getRange(monthlyRow, 11)
+    .setFormula(monthlyFormula)
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle");
+
+  // Add borders to all cells
+  const allDataRange = sheet.getRange(4, 2, monthlyRow - 3, 11);
+  allDataRange.setBorder(true, true, true, true, true, true);
+
+  // Set font size 11 for all data rows (from row 6 to last data row)
+  sheet
+    .getRange(6, 1, sheet.getMaxRows() - 5, sheet.getMaxColumns())
+    .setFontSize(11);
+    
+  // Center-align text in Start/End/Task/Total columns
+  sheet
+    .getRange(6, 8, sheet.getMaxRows() - 5, 4)
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle");
+
+  Logger.log("✓ Alternative " + empName + " completed (" + dates.length + " dates)");
 }

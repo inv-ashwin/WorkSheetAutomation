@@ -2,44 +2,37 @@
  * Timesheet Verification System
  *
  * This script verifies employee timesheet entries based on the configurations
- * defined in a centralized Master Config Spreadsheet and sends daily chat reports/reminders.
+ * defined in the Master Config Spreadsheet ("Manager Sheet") and sends daily chat reports/reminders.
+ * It accesses individual employee worksheets directly using the Sheet ID stored in the config.
  *
  * ============================================================================
  * QUICK START
  * ============================================================================
  *
- * 1. Automatically Create Master Config Sheet (Recommended):
- *    - Select and run createMasterConfigSheet() in Apps Script to automatically
- *      generate a pre-styled Master Config Sheet, set up template columns and checkboxes,
- *      and automatically update your MASTER_CONFIG_SHEET_ID in Script Properties.
+ * 1. Configure Master Config Sheet:
+ *    - Ensure your "Manager Sheet" contains the columns: Project Name, Team Member,
+ *      Email, Chat ID, Sheet ID, and Active.
  *
  * 2. Set script properties:
  *    - Go to Project Settings -> Script Properties in Apps Script.
  *    - Define the required properties below (such as Webhook URLs).
  *
- * 3. Setup config fallback values (Optional):
- *    - Run setupConfiguration() to quickly set up default/initial property values.
+ * 3. Setup initial properties (Optional):
+ *    - Run setupConfiguration() to set initial default property values.
  *
  * ============================================================================
  * CONFIGURATION - Script Properties
  * ============================================================================
- * - MASTER_CONFIG_SHEET_ID: (Required) ID of the Master Config spreadsheet containing projects and member active status
- * - DESTINATION_FOLDER_ID: (Required) Folder ID where timesheet config JSON files are stored
+ * - DESTINATION_FOLDER_ID: (Required) Folder ID where employee spreadsheets are generated
  * - GOOGLE_CHAT_WEBHOOK_URL: (Required) Webhook URL for manager daily summary reports
- * - EMPLOYEE_ALERT_WEBHOOK_URL: (Required) Webhook URL for employee reminders
+ * - EMPLOYEE_ALERT_WEBHOOK_URL: (Required) Webhook URL for employee alerts/reminders
  * - TEST_MODE: "true" or "false" (default: false)
  * - HOLIDAYS: JSON array of holiday dates in YYYY-MM-DD format
  * - ROWS_TO_CHECK_AFTER_DATE: Number of rows to check after finding a date (default: 5)
- * - CONFIG_FILE_ID: (Optional/Legacy) ID of timesheet_config.json file in Google Drive
- * - MAIN_SPREADSHEET_ID: (Fallback) The main spreadsheet ID - used if config file or master config not found
- * - ENGINEER_NAMES: (Fallback) Comma-separated list of engineer names
- * - EMPLOYEE_CHAT_IDS: (Fallback) JSON object mapping employee names to chat IDs
- *
- * Note: The script automatically fetches the spreadsheet ID from the project's timesheet config
- * JSON based on the current year-month (format: "2026-June"). If no project-specific config is
- * found, it falls back to the legacy/global config file or MAIN_SPREADSHEET_ID.
+ * - SHEET_DATA_RANGE: Cell range to scan for inputs (default: "A1:K150")
  * ============================================================================
  */
+
 
 /**
  * Main class for Sheets Verification
@@ -92,186 +85,55 @@ class SheetsVerifier {
     ];
     return monthNames[date.getMonth()];
   }
-  _getCurrentMonthSpreadsheetId(projectKey = null) {
-    try {
-      // Delegate to the existing function which accepts an optional date and project key
-      return this._getSpreadsheetIdForDate(new Date(), projectKey);
-    } catch (e) {
-      Logger.log("Error in _getCurrentMonthSpreadsheetId: " + e);
-      return null;
-    }
-  }
-  /**
-   * Fetch spreadsheet ID from timesheet config JSON based on a specific date's year-month.
-   * When projectKey is set, uses {projectKey}_timesheet_config.json in the destination folder.
-   * Otherwise uses timesheet_config.json (or CONFIG_FILE_ID) for backward compatibility.
-   * Returns the sheet ID for the specified date's month or null if not found
-   * @param {Date} targetDate - Optional date to get sheet ID for (defaults to current date)
-   * @param {string} projectKey - Optional project key (e.g. "Rapid-Raise"); when set, looks for {projectKey}_timesheet_config.json
-   */
-  _getSpreadsheetIdForDate(targetDate = null, projectKey = null) {
-    try {
-      const props = PropertiesService.getScriptProperties();
-      const destinationFolderId = props.getProperty("DESTINATION_FOLDER_ID");
-
-      // Config file name: per-project {key}_timesheet_config.json or single timesheet_config.json
-      const configFileName = projectKey
-        ? projectKey + "_timesheet_config.json"
-        : "timesheet_config.json";
-
-      let configFile = null;
-
-      // Try to get config file by ID first (only when not using per-project config)
-      if (!projectKey) {
-        const configFileId = props.getProperty("CONFIG_FILE_ID");
-        if (configFileId) {
-          try {
-            configFile = DriveApp.getFileById(configFileId);
-          } catch (e) {
-            Logger.log("Could not find config file by ID, trying by name");
-          }
-        }
-      }
-
-      // Find in Timesheet_Configs subfolder first
-      if (!configFile) {
-        try {
-          const parentFolder = destinationFolderId
-            ? DriveApp.getFolderById(destinationFolderId)
-            : DriveApp.getRootFolder();
-          const subfolders = parentFolder.getFoldersByName("Timesheet_Configs");
-          if (subfolders.hasNext()) {
-            const configFolder = subfolders.next();
-            const files = configFolder.getFilesByName(configFileName);
-            if (files.hasNext()) {
-              configFile = files.next();
-            }
-          }
-        } catch (e) {
-          Logger.log("Could not search in Timesheet_Configs folder: " + e);
-        }
-      }
-
-      // Find by name in destination folder (fallback)
-      if (!configFile && destinationFolderId) {
-        try {
-          const folder = DriveApp.getFolderById(destinationFolderId);
-          const files = folder.getFilesByName(configFileName);
-          if (files.hasNext()) {
-            configFile = files.next();
-          }
-        } catch (e) {
-          Logger.log("Could not find config file in folder: " + configFileName);
-        }
-      }
-
-      // If still not found and single config, try root folder (fallback)
-      if (!configFile && !projectKey) {
-        try {
-          const files = DriveApp.getRootFolder().getFilesByName(
-            "timesheet_config.json",
-          );
-          if (files.hasNext()) {
-            configFile = files.next();
-          }
-        } catch (e) {
-          Logger.log("Could not find config file in root folder");
-        }
-      }
-
-      if (!configFile) {
-        Logger.log(configFileName + " not found");
-        return null;
-      }
-
-      // Read and parse config file safely
-      const configContent = configFile.getBlob().getDataAsString();
-      let config = {};
-      try {
-        config = JSON.parse(configContent || "{}");
-      } catch (e) {
-        Logger.log("Warning: Failed to parse config JSON content: " + e + ". Content: '" + configContent + "'");
-      }
-
-      // Use targetDate if provided, otherwise use current date
-      const dateToUse = targetDate || new Date();
-      const targetYear = dateToUse.getFullYear();
-      const targetMonth = this._getMonthNameFromDate(dateToUse);
-      const configKey = targetYear + "-" + targetMonth;
-
-      // Get spreadsheet ID for target month
-      const spreadsheetId = config[configKey];
-
-      if (spreadsheetId) {
-        Logger.log(
-          "✓ Found spreadsheet ID for " + configKey + ": " + spreadsheetId,
-        );
-        return spreadsheetId;
-      } else {
-        Logger.log("No spreadsheet ID found for " + configKey);
-        const availableKeys = Object.keys(config).filter(
-          (k) => k !== "updated_at" && k !== "latest",
-        );
-        if (availableKeys.length > 0) {
-          Logger.log("Available keys: " + availableKeys.join(", "));
-        }
-        return null;
-      }
-    } catch (e) {
-      Logger.log("Error fetching spreadsheet ID from config: " + e);
-      return null;
-    }
-  }
-
-  /**
-   * Fetch project configuration and engineer chat IDs from Master Config Spreadsheet
-   */
-  _fetchProjectsFromMasterSheet() {
+  _fetchEmployeesFromMasterSheet() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) {
       Logger.log("WARNING: Active spreadsheet is not accessible.");
-      return { projects: {}, employeeChatIds: {}, engineerNames: [] };
+      return [];
     }
 
     try {
       const sheet = ss.getSheetByName("Manager Sheet");
       if (!sheet) {
         Logger.log("WARNING: Sheet 'Manager Sheet' not found in Master Config Spreadsheet");
-        return { projects: {}, employeeChatIds: {}, engineerNames: [] };
+        return [];
       }
 
       const values = sheet.getDataRange().getValues();
-      const projects = {};
-      const employeeChatIds = {};
-      const seenEngineers = {};
-      const engineerNames = [];
+      const employees = [];
 
       // Dynamically find table column headers
-      let projIdx = 2;   // Default to Column C
-      let memberIdx = 3; // Default to Column D
-      let chatIdx = 5;   // Default to Column F
-      let activeIdx = 6; // Default to Column G
+      let projIdx = -1;
+      let memberIdx = 2;   // Default to Column C
+      let emailIdx = 3;    // Default to Column D
+      let chatIdx = 4;     // Default to Column E
+      let sheetIdIdx = 5;  // Default to Column F
+      let activeIdx = 6;   // Default to Column G
 
       if (values.length > 10) {
         const headerRow = values[10]; // Row 11
         for (let c = 0; c < headerRow.length; c++) {
           const cellVal = String(headerRow[c] || "").trim().toLowerCase();
           if (cellVal.includes("project name")) projIdx = c;
-          if (cellVal.includes("team member")) memberIdx = c;
-          if (cellVal.includes("chat id")) chatIdx = c;
+          if (cellVal.includes("team member") || cellVal.includes("name")) memberIdx = c;
+          if (cellVal.includes("email")) emailIdx = c;
+          if (cellVal.includes("chat id") || cellVal.includes("chatid")) chatIdx = c;
+          if (cellVal.includes("sheet id") || cellVal.includes("sheetid")) sheetIdIdx = c;
           if (cellVal.includes("active")) activeIdx = c;
         }
       }
 
       for (let i = 11; i < values.length; i++) {
         const row = values[i];
-        if (row.length <= Math.max(projIdx, memberIdx)) continue;
+        if (row.length <= memberIdx) continue;
 
-        const projectName = (row[projIdx] || "").toString().trim();
+        const projectName = projIdx !== -1 && row.length > projIdx ? (row[projIdx] || "").toString().trim() : "";
         const memberName = (row[memberIdx] || "").toString().trim();
+        const email = row.length > emailIdx ? (row[emailIdx] || "").toString().trim() : "";
         const chatId = row.length > chatIdx ? (row[chatIdx] || "").toString().trim() : "";
+        const sheetId = row.length > sheetIdIdx ? (row[sheetIdIdx] || "").toString().trim() : "";
 
-        if (!projectName || !memberName) continue;
+        if (!memberName) continue;
 
         // Check active status - default to true if empty/not provided
         let isActive = true;
@@ -288,35 +150,23 @@ class SheetsVerifier {
         }
 
         if (!isActive) {
-          Logger.log("Skipping inactive/benched employee: " + memberName + " in project " + projectName);
+          Logger.log("Skipping inactive/benched employee: " + memberName);
           continue;
         }
 
-        if (!projects[projectName]) {
-          projects[projectName] = {};
-        }
-
-        // Map memberName -> chatId (keep it empty/falsy if not provided)
-        projects[projectName][memberName] = chatId || "";
-
-        if (chatId) {
-          employeeChatIds[memberName] = chatId;
-        }
-
-        if (!seenEngineers[memberName]) {
-          seenEngineers[memberName] = true;
-          engineerNames.push(memberName);
-        }
+        employees.push({
+          name: memberName,
+          email: email,
+          chatId: chatId,
+          sheetId: sheetId,
+          projectName: projectName
+        });
       }
 
-      return {
-        projects: projects,
-        employeeChatIds: employeeChatIds,
-        engineerNames: engineerNames
-      };
+      return employees;
     } catch (e) {
       Logger.log("Error loading config from master sheet: " + e);
-      return { projects: {}, employeeChatIds: {}, engineerNames: [] };
+      return [];
     }
   }
 
@@ -326,76 +176,16 @@ class SheetsVerifier {
   _loadConfig() {
     const props = PropertiesService.getScriptProperties();
 
-    // Fetch dynamic project config from Master Config Sheet
-    const masterConfig = this._fetchProjectsFromMasterSheet();
+    // Fetch dynamic employee list from Master Config Sheet
+    const employees = this._fetchEmployeesFromMasterSheet();
 
-    // Parse engineer names
-    let engineerNames = masterConfig.engineerNames;
-    if (engineerNames.length === 0) {
-      const engineerNamesStr = props.getProperty("ENGINEER_NAMES");
-      if (engineerNamesStr) {
-        engineerNames = engineerNamesStr.split(",").map((n) => n.trim());
+    // Map employee name -> chat ID
+    const employeeChatIds = {};
+    employees.forEach(emp => {
+      if (emp.chatId) {
+        employeeChatIds[emp.name] = emp.chatId;
       }
-    }
-
-    // Parse employee chat IDs
-    let employeeChatIds = masterConfig.employeeChatIds;
-    if (Object.keys(employeeChatIds).length === 0) {
-      try {
-        const chatIdsStr = props.getProperty("EMPLOYEE_CHAT_IDS");
-        if (chatIdsStr) {
-          employeeChatIds = JSON.parse(chatIdsStr);
-        }
-      } catch (e) {
-        Logger.log("Error parsing EMPLOYEE_CHAT_IDS: " + e);
-      }
-    }
-
-    // Parse PROJECTS
-    let projects = masterConfig.projects;
-    if (Object.keys(projects).length === 0) {
-      try {
-        const projectsStr = props.getProperty("PROJECTS");
-        if (projectsStr) {
-          projects = JSON.parse(projectsStr);
-          // Merge per-project chat IDs into employeeChatIds
-          const projectKeys = Object.keys(projects);
-          for (let p = 0; p < projectKeys.length; p++) {
-            const pk = projectKeys[p];
-            const engineers = projects[pk];
-            if (engineers && typeof engineers === "object") {
-              const names = Object.keys(engineers);
-              for (let n = 0; n < names.length; n++) {
-                employeeChatIds[names[n]] = engineers[names[n]];
-              }
-            }
-          }
-        }
-      } catch (e) {
-        Logger.log("Error parsing PROJECTS: " + e);
-      }
-    }
-
-    // When PROJECTS is set, engineer list for Backlog etc. is union of all project engineers
-    if (Object.keys(projects).length > 0) {
-      const seen = {};
-      const allEngineers = [];
-      for (let p = 0; p < Object.keys(projects).length; p++) {
-        const engs = projects[Object.keys(projects)[p]];
-        if (engs && typeof engs === "object") {
-          const names = Object.keys(engs);
-          for (let n = 0; n < names.length; n++) {
-            if (!seen[names[n]]) {
-              seen[names[n]] = true;
-              allEngineers.push(names[n]);
-            }
-          }
-        }
-      }
-      if (allEngineers.length > 0) {
-        engineerNames = allEngineers;
-      }
-    }
+    });
 
     // Parse holidays
     let holidays = [];
@@ -404,7 +194,7 @@ class SheetsVerifier {
       if (holidaysStr && JSON.parse(holidaysStr).length > 0) {
         holidays = JSON.parse(holidaysStr);
       } else {
-        // Default holidays for 2025
+        // Default holidays for 2026
         holidays = [
           "2026-01-01",
           "2026-01-26",
@@ -413,46 +203,16 @@ class SheetsVerifier {
           "2026-04-15",
           "2026-05-01",
           "2026-08-15",
-          "2026-08-25",
-          "2026-08-26",
-          "2026-09-04",
           "2026-10-02",
-          "2026-10-20",
-          "2026-12-25",
+          "2026-12-25"
         ];
       }
     } catch (e) {
       Logger.log("Error parsing HOLIDAYS: " + e);
     }
 
-    // Get spreadsheet ID for current month from config file
-    // When PROJECTS is set, also try first project's spreadsheet as fallback for iteration
-    let mainSpreadsheetId = this._getCurrentMonthSpreadsheetId(null);
-    if (!mainSpreadsheetId && Object.keys(projects).length > 0) {
-      const firstProjectKey = Object.keys(projects)[0];
-      mainSpreadsheetId = this._getCurrentMonthSpreadsheetId(firstProjectKey);
-      if (mainSpreadsheetId) {
-        Logger.log(
-          "Using first project (" +
-            firstProjectKey +
-            ") spreadsheet as fallback",
-        );
-      }
-    }
-    if (!mainSpreadsheetId) {
-      mainSpreadsheetId = props.getProperty("MAIN_SPREADSHEET_ID");
-      if (mainSpreadsheetId) {
-        Logger.log(
-          "Using MAIN_SPREADSHEET_ID from Script Properties as fallback",
-        );
-      }
-    }
-
     return {
-      mainSpreadsheetId: mainSpreadsheetId,
-      projectKey: null,
-      projects: projects,
-      engineerNames: engineerNames,
+      employees: employees,
       googleChatWebhookUrl: props.getProperty("GOOGLE_CHAT_WEBHOOK_URL"),
       employeeAlertWebhookUrl: props.getProperty("EMPLOYEE_ALERT_WEBHOOK_URL"),
       testMode: props.getProperty("TEST_MODE") === "true",
@@ -1191,109 +951,24 @@ class SheetsVerifier {
     const lastWorkingDayMonth = this._getMonthNameFromDate(lastWorkingDayDate);
     const lastWorkingDayYear = lastWorkingDayDate.getFullYear();
 
-    const projectKeys =
-      this.config.projects && Object.keys(this.config.projects).length > 0
-        ? Object.keys(this.config.projects)
-        : null;
+    const employees = this.config.employees || [];
+    const tabName = lastWorkingDayMonth + "-" + lastWorkingDayYear; // e.g. June-2026
 
-    if (projectKeys && projectKeys.length > 0) {
-      // Iterate over each project: use project's config and engineers
-      for (let p = 0; p < projectKeys.length; p++) {
-        const projectKey = projectKeys[p];
-        const projectEngineers = this.config.projects[projectKey];
-        if (!projectEngineers || typeof projectEngineers !== "object") {
-          continue;
-        }
-        const engineerNames = Object.keys(projectEngineers);
+    for (let i = 0; i < employees.length; i++) {
+      const emp = employees[i];
+      Logger.log("Checking " + emp.name + "'s sheet...");
 
-        const spreadsheetId = this._getSpreadsheetIdForDate(
-          lastWorkingDayDate,
-          projectKey,
-        );
-        const effectiveSpreadsheetId =
-          spreadsheetId || this.config.mainSpreadsheetId;
-
-        Logger.log(
-          "Project " +
-            projectKey +
-            ": checking " +
-            lastWorkingDay +
-            ", spreadsheet: " +
-            (effectiveSpreadsheetId || "none"),
-        );
-
-        for (let i = 0; i < engineerNames.length; i++) {
-          const engineerName = engineerNames[i];
-          Logger.log("Checking [" + projectKey + "] " + engineerName + "...");
-
-          const sheetData = this.getEngineerSheetData(
-            engineerName,
-            lastWorkingDayMonth,
-            effectiveSpreadsheetId,
-          );
-          const lastDayEntries = this.parseLastWorkingDayEntries(
-            sheetData,
-            lastWorkingDay,
-          );
-
-          Logger.log(
-            "Found " +
-              lastDayEntries.length +
-              " entries for " +
-              engineerName +
-              " on " +
-              lastWorkingDay,
-          );
-
-          if (lastDayEntries.length > 0) {
-            const analysis = this.generateAnalysisMessage(
-              engineerName,
-              lastDayEntries,
-            );
-            results.push("[" + projectKey + "] " + analysis);
-          } else {
-            results.push([engineerName, false]);
-          }
-        }
+      const spreadsheetId = emp.sheetId;
+      if (!spreadsheetId) {
+        Logger.log("Warning: No Sheet ID found for " + emp.name + ", skipping verification.");
+        results.push([emp.name, false]);
+        continue;
       }
-      return results;
-    }
-
-    // Single-project flow: PROJECT_KEY / ENGINEER_NAMES
-    const spreadsheetId = this._getSpreadsheetIdForDate(
-      lastWorkingDayDate,
-      this.config.projectKey,
-    );
-    if (!spreadsheetId) {
-      Logger.log(
-        "Warning: Could not find spreadsheet ID for " +
-          lastWorkingDayYear +
-          "-" +
-          lastWorkingDayMonth +
-          ", using fallback",
-      );
-    }
-
-    const effectiveSpreadsheetId =
-      spreadsheetId || this.config.mainSpreadsheetId;
-
-    Logger.log("Checking entries for working day: " + lastWorkingDay);
-    Logger.log(
-      "Last working day is in month: " +
-        lastWorkingDayMonth +
-        " " +
-        lastWorkingDayYear,
-    );
-    Logger.log("Using spreadsheet ID: " + effectiveSpreadsheetId);
-
-    for (let i = 0; i < this.config.engineerNames.length; i++) {
-      const engineerName = this.config.engineerNames[i];
-      Logger.log("Checking " + engineerName + "'s sheet...");
 
       const sheetData = this.getEngineerSheetData(
-        engineerName,
+        tabName,
         lastWorkingDayMonth,
-        effectiveSpreadsheetId,
+        spreadsheetId,
       );
       const lastDayEntries = this.parseLastWorkingDayEntries(
         sheetData,
@@ -1304,19 +979,20 @@ class SheetsVerifier {
         "Found " +
           lastDayEntries.length +
           " entries for " +
-          engineerName +
+          emp.name +
           " on " +
           lastWorkingDay,
       );
 
       if (lastDayEntries.length > 0) {
         const analysis = this.generateAnalysisMessage(
-          engineerName,
+          emp.name,
           lastDayEntries,
         );
-        results.push(analysis);
+        const prefix = emp.projectName ? "[" + emp.projectName + "] " : "";
+        results.push(prefix + analysis);
       } else {
-        results.push([engineerName, false]);
+        results.push([emp.name, false]);
       }
     }
 

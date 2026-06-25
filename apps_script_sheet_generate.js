@@ -87,7 +87,9 @@ function syncSettingsFromSheet_() {
       const valColC = values[i].length > 2 ? String(values[i][2] || "").trim() : "";
       
       // Stop if we reach the header of the Work Sheet Manager table
-      if (name.toLowerCase().includes("project name") || 
+      if (name.toLowerCase().includes("project name") ||
+          name.toLowerCase().includes("team member") || 
+          name.toLowerCase().includes("name") || 
           name.toLowerCase().includes("work sheet manager") || 
           valColB.toLowerCase().includes("work sheet manager") ||
           valColC.toLowerCase().includes("work sheet manager") ||
@@ -182,7 +184,7 @@ function loadGlobalsFromProperties_() {
  * FETCH CONFIGURATION FROM MASTER SPREADSHEET
  ************************************************************/
 
-function fetchProjectsConfig_() {
+function fetchEmployeesConfig_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) {
     throw new Error("Active spreadsheet is not accessible. Make sure the script is bound to the Master Config Spreadsheet.");
@@ -194,36 +196,40 @@ function fetchProjectsConfig_() {
   }
 
   const values = sheet.getDataRange().getValues();
-  const projects = {};
-  const emails = {};
-  const employeeEmails = {};
+  const employees = [];
 
   // Dynamically find table column headers
-  let projIdx = 2;   // Default to Column C
-  let memberIdx = 3; // Default to Column D
-  let emailIdx = 4;  // Default to Column E
-  let activeIdx = 6; // Default to Column G
+  let projIdx = -1;
+  let memberIdx = 2;   // Default to Column C
+  let emailIdx = 3;    // Default to Column D
+  let chatIdx = 4;     // Default to Column E
+  let sheetIdIdx = 5;  // Default to Column F
+  let activeIdx = 6;   // Default to Column G
 
   if (values.length > 10) {
     const headerRow = values[10]; // Row 11
     for (let c = 0; c < headerRow.length; c++) {
       const cellVal = String(headerRow[c] || "").trim().toLowerCase();
       if (cellVal.includes("project name")) projIdx = c;
-      if (cellVal.includes("team member")) memberIdx = c;
+      if (cellVal.includes("team member") || cellVal.includes("name")) memberIdx = c;
       if (cellVal.includes("email")) emailIdx = c;
+      if (cellVal.includes("chat id") || cellVal.includes("chatid")) chatIdx = c;
+      if (cellVal.includes("sheet id") || cellVal.includes("sheetid")) sheetIdIdx = c;
       if (cellVal.includes("active")) activeIdx = c;
     }
   }
 
   for (let i = 11; i < values.length; i++) {
     const row = values[i];
-    if (row.length <= Math.max(projIdx, memberIdx)) continue;
+    if (row.length <= memberIdx) continue;
 
-    const projectName = (row[projIdx] || "").toString().trim();
+    const projectName = projIdx !== -1 && row.length > projIdx ? (row[projIdx] || "").toString().trim() : "";
     const memberName = (row[memberIdx] || "").toString().trim();
     const email = row.length > emailIdx ? (row[emailIdx] || "").toString().trim() : "";
+    const chatId = row.length > chatIdx ? (row[chatIdx] || "").toString().trim() : "";
+    const sheetId = row.length > sheetIdIdx ? (row[sheetIdIdx] || "").toString().trim() : "";
 
-    if (!projectName || !memberName) continue;
+    if (!memberName) continue;
 
     // Check active status - default to true if empty/not provided
     let isActive = true;
@@ -240,33 +246,22 @@ function fetchProjectsConfig_() {
     }
 
     if (!isActive) {
-      Logger.log("Skipping inactive/benched employee: " + memberName + " in project " + projectName);
+      Logger.log("Skipping inactive/benched employee: " + memberName);
       continue;
     }
 
-    if (!projects[projectName]) {
-      projects[projectName] = [];
-    }
-    projects[projectName].push(memberName);
-
-    if (email) {
-      if (!emails[projectName]) {
-        emails[projectName] = [];
-      }
-      emails[projectName].push(email);
-
-      if (!employeeEmails[projectName]) {
-        employeeEmails[projectName] = {};
-      }
-      employeeEmails[projectName][memberName] = email;
-    }
+    employees.push({
+      name: memberName,
+      email: email,
+      chatId: chatId,
+      sheetId: sheetId,
+      projectName: projectName,
+      rowNum: i + 1, // 1-indexed row number
+      sheetIdColNum: sheetIdIdx + 1 // 1-indexed column number
+    });
   }
 
-  return {
-    projects: projects,
-    emails: emails,
-    employeeEmails: employeeEmails
-  };
+  return employees;
 }
 
 /************************************************************
@@ -287,28 +282,6 @@ function grantProjectAccess_(file, emails) {
       Logger.log("❌ Permission error: " + error);
     }
   });
-}
-
-// ======================================================
-// HELPER FOR DETECTING EXISTING SPREADSHEETS
-// ======================================================
-
-function getExistingSpreadsheetId_(projectName, monthName, year) {
-  try {
-    const configFolder = getOrCreateConfigFolder_();
-    const configFileName = projectName + "_timesheet_config.json";
-    const files = configFolder.getFilesByName(configFileName);
-    if (files.hasNext()) {
-      const file = files.next();
-      const content = file.getBlob().getDataAsString();
-      const parsed = JSON.parse(content || "{}");
-      const key = year + "-" + monthName;
-      return parsed[key] || null;
-    }
-  } catch (e) {
-    Logger.log("Error getting existing spreadsheet ID: " + e);
-  }
-  return null;
 }
 
 // ======================================================
@@ -334,29 +307,25 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
   }
 
   const dates = getDatesForMonth_(monthName, year);
-  const config = fetchProjectsConfig_();
-  const projects = config.projects;
-  const projectEmails = config.emails;
+  const employees = fetchEmployeesConfig_();
+  const tabName = monthName + "-" + year; // Format: month-year (e.g. June-2026)
 
-  for (const projectName in projects) {
+  const ssMaster = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetMaster = ssMaster.getSheetByName("Manager Sheet");
 
-    const employees = projects[projectName];
-    const emails = projectEmails[projectName] || [];
-    const workbookName =
-      projectName + "_work_report_" + monthName + "_" + year;
-
+  employees.forEach(function (emp) {
+    const workbookName = emp.name + "_work_report_" + year;
     let ss = null;
     let isNew = false;
-    let existingId = null;
+    let sheetId = emp.sheetId;
 
     if (!testMode) {
-      existingId = getExistingSpreadsheetId_(projectName, monthName, year);
-      if (existingId) {
+      if (sheetId) {
         try {
-          ss = SpreadsheetApp.openById(existingId);
-          Logger.log("Found existing spreadsheet: " + workbookName + " (ID: " + existingId + ")");
+          ss = SpreadsheetApp.openById(sheetId);
+          Logger.log("Found existing spreadsheet for " + emp.name + " (ID: " + sheetId + ")");
         } catch (e) {
-          Logger.log("Could not open existing spreadsheet by ID, will create a new one. Error: " + e);
+          Logger.log("Could not open existing spreadsheet by ID for " + emp.name + ", will create a new one. Error: " + e);
         }
       }
     }
@@ -365,17 +334,18 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
       isNew = true;
       if (testMode) {
         Logger.log("TEST MODE → Would create new spreadsheet: " + workbookName);
-        employees.forEach(function (emp) {
-          Logger.log("TEST MODE → Would create tab: " + emp);
-        });
-        const fakeId = "TEST_" + Utilities.getUuid();
-        updateConfigJson_(projectName, fakeId, monthName, year, true);
-        continue;
+        Logger.log("TEST MODE → Would create tab: " + tabName);
+        return;
       }
 
       ss = SpreadsheetApp.create(workbookName);
-      const file = DriveApp.getFileById(ss.getId());
+      sheetId = ss.getId();
 
+      // Write the new sheet ID back to the Master Config Sheet immediately
+      sheetMaster.getRange(emp.rowNum, emp.sheetIdColNum).setValue(sheetId);
+      Logger.log("✓ Saved sheet ID " + sheetId + " for " + emp.name + " in row " + emp.rowNum);
+
+      const file = DriveApp.getFileById(sheetId);
       if (DESTINATION_FOLDER_ID) {
         const folder = DriveApp.getFolderById(DESTINATION_FOLDER_ID);
         file.moveTo(folder);
@@ -384,104 +354,31 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
 
     const defaultSheet = isNew ? ss.getSheets()[0] : null;
 
-    const newlyAddedEmployees = [];
-    employees.forEach(function (emp) {
-      const sheet = ss.getSheetByName(emp);
-      if (!sheet) {
-        Logger.log("Creating new tab for employee: " + emp + " in project " + projectName);
-        setupEmployeeSheet_(ss, emp, dates, projectName);
-        newlyAddedEmployees.push(emp);
-      } else {
-        Logger.log("Tab already exists for employee: " + emp + " (skipping)");
-      }
-    });
+    const tab = ss.getSheetByName(tabName);
+    if (!tab) {
+      Logger.log("Creating new tab: " + tabName + " for employee: " + emp.name);
+      setupEmployeeSheet_(ss, tabName, dates, emp.name, emp.projectName);
+    } else {
+      Logger.log("Tab " + tabName + " already exists for employee: " + emp.name + " (skipping)");
+    }
 
-    if (isNew) {
+    if (isNew && defaultSheet) {
       ss.deleteSheet(defaultSheet);
     }
 
-    const url = ss.getUrl();
-    const file = DriveApp.getFileById(ss.getId());
-    
-    // Grant access: if spreadsheet is new, share with all active project members.
-    // If spreadsheet already existed, share ONLY with newly added employees.
-    let emailsToShare = [];
-    if (isNew) {
-      emailsToShare = emails;
-    } else {
-      const employeeEmails = config.employeeEmails[projectName] || {};
-      newlyAddedEmployees.forEach(function (emp) {
-        const email = employeeEmails[emp];
-        if (email) {
-          emailsToShare.push(email);
-        }
-      });
+    if (isNew && emp.email) {
+      const file = DriveApp.getFileById(ss.getId());
+      grantProjectAccess_(file, [emp.email]);
+      Logger.log("✓ Spreadsheet '" + workbookName + "' shared with " + emp.email);
     }
 
-    grantProjectAccess_(file, emailsToShare);
-    updateConfigJson_(projectName, ss.getId(), monthName, year);
-    
-    if (isNew) {
-      Logger.log("✓ New spreadsheet '" + workbookName + "' created and shared.");
-    } else {
-      Logger.log("✓ Existing spreadsheet '" + workbookName + "' updated and shared.");
+    // Sort sheets chronologically to ensure they are ordered correctly
+    if (!testMode && ss) {
+      sortSheetsChronologically_(ss);
     }
-  }
+  });
 
-  Logger.log("✓ All project sheets processed successfully");
-}
-
-// ======================================================
-// CONFIG FOLDER HANDLING
-// ======================================================
-
-function getOrCreateConfigFolder_() {
-
-  const parentFolder = DESTINATION_FOLDER_ID
-    ? DriveApp.getFolderById(DESTINATION_FOLDER_ID)
-    : DriveApp.getRootFolder();
-
-  const folders = parentFolder.getFoldersByName(CONFIG_FOLDER_NAME);
-
-  if (folders.hasNext()) {
-    return folders.next();
-  }
-
-  return parentFolder.createFolder(CONFIG_FOLDER_NAME);
-}
-
-function updateConfigJson_(projectName, spreadsheetId, monthName, year, testMode = false) {
-
-  const configFolder = getOrCreateConfigFolder_();
-  const configFileName = projectName + "_timesheet_config.json";
-  const key = year + "-" + monthName;
-
-  const newEntry = {};
-  newEntry[key] = spreadsheetId;
-
-  if (testMode) {
-    Logger.log("TEST MODE → JSON Update:");
-    Logger.log(JSON.stringify(newEntry, null, 2));
-    return;
-  }
-
-  const files = configFolder.getFilesByName(configFileName);
-
-  if (files.hasNext()) {
-    const file = files.next();
-    const content = file.getBlob().getDataAsString();
-    const parsed = JSON.parse(content || "{}");
-
-    parsed[key] = spreadsheetId;
-
-    file.setContent(JSON.stringify(parsed, null, 2));
-  } else {
-    configFolder.createFile(
-      configFileName,
-      JSON.stringify(newEntry, null, 2),
-      MimeType.PLAIN_TEXT
-    );
-  }
+  Logger.log("✓ All employee sheets processed successfully");
 }
 
 // ======================================================
@@ -540,9 +437,9 @@ function isHoliday_(dateObj) {
 /**
  * Create and format an individual employee timesheet
  */
-function setupEmployeeSheet_(ss, empName, dates,projectName) {
+function setupEmployeeSheet_(ss, tabName, dates, empName, projectName) {
   // Create new sheet
-  const sheet = ss.insertSheet(empName);
+  const sheet = ss.insertSheet(tabName);
 
   // Set column widths
   sheet.setColumnWidth(1, 30); // A
@@ -564,9 +461,10 @@ function setupEmployeeSheet_(ss, empName, dates,projectName) {
 
   // Row 2: Title
   sheet.getRange("B2:J2").merge();
+  const titleValue = projectName ? projectName + "- " + empName : empName;
   sheet
     .getRange("B2")
-    .setValue(projectName+"- " + empName)
+    .setValue(titleValue)
     .setFontWeight("bold")
     .setHorizontalAlignment("center")
     .setFontSize(12);
@@ -819,4 +717,49 @@ function btnRunDailyVerification_() {
       ui.alert("Error", "Failed to run daily verification: " + e.toString(), ui.ButtonSet.OK);
     }
   }
+}
+
+// ======================================================
+// CHRONOLOGICAL SHEET SORTING HELPERS
+// ======================================================
+
+function sortSheetsChronologically_(ss) {
+  const sheets = ss.getSheets();
+  const sheetsWithDate = [];
+  const otherSheets = [];
+
+  sheets.forEach(sheet => {
+    const name = sheet.getName();
+    const date = parseSheetDate_(name);
+    if (date) {
+      sheetsWithDate.push({ sheet: sheet, date: date });
+    } else {
+      otherSheets.push(sheet);
+    }
+  });
+
+  // Sort chronological sheets: oldest to newest
+  sheetsWithDate.sort((a, b) => a.date - b.date);
+
+  // Combine them: other sheets (Readme/Templates) first, then chronological sheets
+  const sortedSheets = [...otherSheets, ...sheetsWithDate.map(item => item.sheet)];
+
+  // Apply new order to spreadsheet
+  for (let i = 0; i < sortedSheets.length; i++) {
+    ss.setActiveSheet(sortedSheets[i]);
+    ss.moveActiveSheet(i + 1); // 1-indexed in Google Apps Script
+  }
+}
+
+function parseSheetDate_(name) {
+  const parts = name.split("-");
+  if (parts.length !== 2) return null;
+  const monthMap = {
+    january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+    july: 6, august: 7, september: 8, october: 9, november: 10, december: 11
+  };
+  const month = monthMap[parts[0].toLowerCase()];
+  const year = parseInt(parts[1], 10);
+  if (month === undefined || isNaN(year)) return null;
+  return new Date(year, month, 1);
 }

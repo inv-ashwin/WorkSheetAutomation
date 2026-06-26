@@ -1,3 +1,18 @@
+// --- CONFIGURATION CONSTANTS ---
+// Define Colors (Matching the clean, corporate blue aesthetic)
+const COLOR_HEADER_BG = '#8faadc'; // Soft Steel/Cornflower Blue
+const COLOR_BORDER = '#000000';    // Black for borders (as per screenshot)
+const COLOR_TEXT_DARK = '#000000'; // Dark/Black text for high contrast
+
+// Define Attendance Dropdown Options (Edit these values to change the dropdown list)
+const ATTENDANCE_OPTIONS = ['Present', 'Absent', 'Excused'];
+
+// Define Prepared By Members and their Email mappings (Edit these values to configure the list and emails)
+const PREPARED_BY_MEMBERS = {
+    'Ashwin Sanalkumar': 'ashwin.sanalkumar@innovaturelabs.com',
+    'abhiram': 'abhiram@example.com'
+};
+
 /**
  * Generates a Minutes of Meeting (MoM) sheet based on a professional template.
  * The sheet is named after the current date (e.g. YYYY-MM-DD).
@@ -15,8 +30,9 @@ function createMinutesOfMeetingSheet() {
     // Check if a sheet with this name already exists
     let sheet = ss.getSheetByName(sheetName);
     if (sheet) {
-        // Delete the existing sheet to start fresh
-        ss.deleteSheet(sheet);
+        Logger.log(`Sheet with name "${sheetName}" already exists. Generation skipped to prevent overwriting existing work.`);
+        SpreadsheetApp.getUi().alert(`Info: A sheet for today ("${sheetName}") already exists. Generation skipped to prevent overwriting your existing changes.`);
+        return;
     }
 
     // Find the correct insertion index to keep the sheets in date order (ascending)
@@ -56,17 +72,6 @@ function createMinutesOfMeetingSheet() {
 
     // Set grid lines visible
     sheet.setHiddenGridlines(false);
-
-    // Define Colors (Matching the clean, corporate blue aesthetic)
-    const COLOR_HEADER_BG = '#8faadc'; // Soft Steel/Cornflower Blue
-    const COLOR_BORDER = '#000000';    // Black for borders (as per screenshot)
-    const COLOR_TEXT_DARK = '#000000'; // Dark/Black text for high contrast
-
-    // Define Attendance Dropdown Options (Edit these values to change the dropdown list)
-    const ATTENDANCE_OPTIONS = ['Present', 'Absent', 'Excused'];
-
-    // Define Prepared By Dropdown Options (Edit these values to change the dropdown list)
-    const PREPARED_BY_OPTIONS = ['ashwin', 'abhiram'];
 
     // Define Column Widths (A is an empty spacer column, B-G are data columns)
     const columnWidths = {
@@ -178,12 +183,13 @@ function createMinutesOfMeetingSheet() {
     styleRange(cellB6C6, COLOR_HEADER_BG, true, 10, "center", COLOR_TEXT_DARK);
 
     const cellD6 = sheet.getRange("D6");
+    const preparedByNames = Object.keys(PREPARED_BY_MEMBERS);
     const preparedByRule = SpreadsheetApp.newDataValidation()
-        .requireValueInList(PREPARED_BY_OPTIONS, true)
+        .requireValueInList(preparedByNames, true)
         .setAllowInvalid(false)
         .build();
     cellD6.setDataValidation(preparedByRule);
-    cellD6.setValue(PREPARED_BY_OPTIONS[0]);
+    cellD6.setValue(preparedByNames[0]);
     styleRange(cellD6, null, false, 10, "center", COLOR_TEXT_DARK);
 
     const cellE6F6 = sheet.getRange("E6:F6");
@@ -251,18 +257,18 @@ function createMinutesOfMeetingSheet() {
     // Table Header (Row 21)
     const actionHeader = sheet.getRange("B21:G21");
     sheet.getRange("B21").setValue("SI No.");
-    
+
     // Action Item in second table merges C:D
     const cellActionHeader = sheet.getRange("C21:D21");
     cellActionHeader.merge();
     cellActionHeader.setValue("Action Item");
-    
+
     sheet.getRange("E21").setValue("Responsibility");
-    
+
     const cellTargetDate = sheet.getRange("F21");
     cellTargetDate.setValue("Target Date of\nClosure");
     cellTargetDate.setWrap(true);
-    
+
     sheet.getRange("G21").setValue("Remarks");
 
     // Style table headers
@@ -291,4 +297,18 @@ function createMinutesOfMeetingSheet() {
 
     // Apply borders for the action items table data
     applyBorders(sheet.getRange("B22:G39"));
+
+    Logger.log(`Successfully created and configured sheet: "${sheetName}"`);
+}
+
+/**
+ * Automatically runs when the spreadsheet is opened.
+ * Creates a custom menu in the Google Sheets toolbar.
+ */
+function onOpen() {
+    const ui = SpreadsheetApp.getUi();
+    ui.createMenu('MoM Automation')
+        .addItem('Generate MoM', 'createMinutesOfMeetingSheet')
+        .addItem('Send Alert', 'alert_member')
+        .addToUi();
 }

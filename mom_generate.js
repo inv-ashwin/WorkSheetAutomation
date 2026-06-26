@@ -19,8 +19,37 @@ function createMinutesOfMeetingSheet() {
         ss.deleteSheet(sheet);
     }
 
-    // Insert a new sheet
-    sheet = ss.insertSheet(sheetName);
+    // Find the correct insertion index to keep the sheets in date order (ascending)
+    const sheets = ss.getSheets();
+    let insertIndex = sheets.length; // Default to end of spreadsheet
+
+    function dateToKey(name) {
+        const parts = name.split('-');
+        if (parts.length === 3) {
+            const d = parts[0];
+            const m = parts[1];
+            const y = parts[2];
+            // Match exactly DD-MM-YYYY format
+            if (d.length === 2 && m.length === 2 && y.length === 4 && !isNaN(Number(y + m + d))) {
+                return Number(y + m + d);
+            }
+        }
+        return null;
+    }
+
+    const newKey = dateToKey(sheetName);
+    if (newKey !== null) {
+        for (let i = 0; i < sheets.length; i++) {
+            const currentKey = dateToKey(sheets[i].getName());
+            if (currentKey !== null && currentKey > newKey) {
+                insertIndex = i;
+                break;
+            }
+        }
+    }
+
+    // Insert a new sheet at the sorted position
+    sheet = ss.insertSheet(sheetName, insertIndex);
 
     // Ensure the sheet is active
     sheet.activate();
@@ -35,6 +64,9 @@ function createMinutesOfMeetingSheet() {
 
     // Define Attendance Dropdown Options (Edit these values to change the dropdown list)
     const ATTENDANCE_OPTIONS = ['Present', 'Absent', 'Excused'];
+
+    // Define Prepared By Dropdown Options (Edit these values to change the dropdown list)
+    const PREPARED_BY_OPTIONS = ['ashwin', 'abhiram'];
 
     // Define Column Widths (A is an empty spacer column, B-G are data columns)
     const columnWidths = {
@@ -72,24 +104,25 @@ function createMinutesOfMeetingSheet() {
     sheet.setRowHeight(3, 15);  // Spacer row 3
     sheet.setRowHeight(4, 25);  // Meta row 4
     sheet.setRowHeight(5, 25);  // Meta row 5
-    sheet.setRowHeight(6, 15);  // Spacer row 6
-    sheet.setRowHeight(7, 25);  // First table header row 7
+    sheet.setRowHeight(6, 25);  // Meta row 6 (Prepared by)
+    sheet.setRowHeight(7, 15);  // Spacer row 7 (was 6)
+    sheet.setRowHeight(8, 25);  // First table header row 8 (was 7)
 
-    // First table data (Rows 8-15)
-    for (let r = 8; r <= 15; r++) {
+    // First table data (Rows 9-16)
+    for (let r = 9; r <= 16; r++) {
         sheet.setRowHeight(r, 20);
     }
 
-    // Spacers between tables (Rows 16-19)
-    sheet.setRowHeight(16, 15);
+    // Spacers between tables (Rows 17-20)
     sheet.setRowHeight(17, 15);
     sheet.setRowHeight(18, 15);
     sheet.setRowHeight(19, 15);
+    sheet.setRowHeight(20, 15);
 
-    sheet.setRowHeight(20, 21);  // Second table header row 20
+    sheet.setRowHeight(21, 21);  // Second table header row 21 (was 20)
 
-    // Second table data (Rows 21-38)
-    for (let r = 21; r <= 38; r++) {
+    // Second table data (Rows 22-39)
+    for (let r = 22; r <= 39; r++) {
         sheet.setRowHeight(r, 20);
     }
 
@@ -138,32 +171,54 @@ function createMinutesOfMeetingSheet() {
     cellG5.setValue("45 minutes");
     styleRange(cellG5, null, false, 10, "left", COLOR_TEXT_DARK);
 
+    // Row 6
+    const cellB6C6 = sheet.getRange("B6:C6");
+    cellB6C6.merge();
+    cellB6C6.setValue("Prepared by");
+    styleRange(cellB6C6, COLOR_HEADER_BG, true, 10, "center", COLOR_TEXT_DARK);
+
+    const cellD6 = sheet.getRange("D6");
+    const preparedByRule = SpreadsheetApp.newDataValidation()
+        .requireValueInList(PREPARED_BY_OPTIONS, true)
+        .setAllowInvalid(false)
+        .build();
+    cellD6.setDataValidation(preparedByRule);
+    cellD6.setValue(PREPARED_BY_OPTIONS[0]);
+    styleRange(cellD6, null, false, 10, "center", COLOR_TEXT_DARK);
+
+    const cellE6F6 = sheet.getRange("E6:F6");
+    cellE6F6.merge();
+    styleRange(cellE6F6, null, false, 10, "center", COLOR_TEXT_DARK);
+
+    const cellG6 = sheet.getRange("G6");
+    styleRange(cellG6, null, false, 10, "left", COLOR_TEXT_DARK);
+
     // Set borders for Info Block
-    applyBorders(sheet.getRange("B4:G5"));
+    applyBorders(sheet.getRange("B4:G6"));
 
     // --- 3. ATTENDANCE TABLE ---
-    // Table Header (Row 7)
-    const attHeader = sheet.getRange("B7:G7");
-    sheet.getRange("B7").setValue("Sl. No.");
-    sheet.getRange("C7").setValue("Invitees");
-    sheet.getRange("D7").setValue("Attendance");
-    sheet.getRange("E7").setValue("Remarks");
-    // F7 and G7 are kept blank but styled as part of the header row
-    sheet.getRange("F7").setValue("");
-    sheet.getRange("G7").setValue("");
+    // Table Header (Row 8)
+    const attHeader = sheet.getRange("B8:G8");
+    sheet.getRange("B8").setValue("Sl. No.");
+    sheet.getRange("C8").setValue("Invitees");
+    sheet.getRange("D8").setValue("Attendance");
+    sheet.getRange("E8").setValue("Remarks");
+    // F8 and G8 are kept blank but styled as part of the header row
+    sheet.getRange("F8").setValue("");
+    sheet.getRange("G8").setValue("");
 
     // Style table headers
     styleRange(attHeader, COLOR_HEADER_BG, true, 10, "center", COLOR_TEXT_DARK);
     applyBorders(attHeader);
 
-    // Table Data (Rows 8 to 15 - 8 rows)
+    // Table Data (Rows 9 to 16 - 8 rows)
     const validationRule = SpreadsheetApp.newDataValidation()
         .requireValueInList(ATTENDANCE_OPTIONS, true)
         .setAllowInvalid(false)
         .build();
 
     for (let i = 0; i < 8; i++) {
-        const row = 8 + i;
+        const row = 9 + i;
 
         // Sl. No.
         const cellSl = sheet.getRange(row, 2);
@@ -178,6 +233,7 @@ function createMinutesOfMeetingSheet() {
         // Attendance dropdown validation
         const cellAttendance = sheet.getRange(row, 4);
         cellAttendance.setDataValidation(validationRule);
+        cellAttendance.setValue(ATTENDANCE_OPTIONS[0]);
         styleRange(cellAttendance, null, false, 10, "center");
 
         // Remarks (Col E)
@@ -189,33 +245,33 @@ function createMinutesOfMeetingSheet() {
     }
 
     // Apply borders for the attendance table data
-    applyBorders(sheet.getRange("B8:G15"));
+    applyBorders(sheet.getRange("B9:G16"));
 
     // --- 4. ACTION ITEMS TABLE ---
-    // Table Header (Row 20)
-    const actionHeader = sheet.getRange("B20:G20");
-    sheet.getRange("B20").setValue("SI No.");
+    // Table Header (Row 21)
+    const actionHeader = sheet.getRange("B21:G21");
+    sheet.getRange("B21").setValue("SI No.");
     
     // Action Item in second table merges C:D
-    const cellActionHeader = sheet.getRange("C20:D20");
+    const cellActionHeader = sheet.getRange("C21:D21");
     cellActionHeader.merge();
     cellActionHeader.setValue("Action Item");
     
-    sheet.getRange("E20").setValue("Responsibility");
+    sheet.getRange("E21").setValue("Responsibility");
     
-    const cellTargetDate = sheet.getRange("F20");
+    const cellTargetDate = sheet.getRange("F21");
     cellTargetDate.setValue("Target Date of\nClosure");
     cellTargetDate.setWrap(true);
     
-    sheet.getRange("G20").setValue("Remarks");
+    sheet.getRange("G21").setValue("Remarks");
 
     // Style table headers
     styleRange(actionHeader, COLOR_HEADER_BG, true, 10, "center", COLOR_TEXT_DARK);
     applyBorders(actionHeader);
 
-    // Table Data (Rows 21 to 38 - 18 rows)
+    // Table Data (Rows 22 to 39 - 18 rows)
     for (let i = 0; i < 18; i++) {
-        const row = 21 + i;
+        const row = 22 + i;
 
         // SI No.
         const cellSl = sheet.getRange(row, 2);
@@ -234,5 +290,5 @@ function createMinutesOfMeetingSheet() {
     }
 
     // Apply borders for the action items table data
-    applyBorders(sheet.getRange("B21:G38"));
+    applyBorders(sheet.getRange("B22:G39"));
 }

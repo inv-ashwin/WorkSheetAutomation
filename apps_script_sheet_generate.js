@@ -40,6 +40,21 @@ let HOLIDAY_DATES = [
   "2026-10-02",
   "2026-12-25"
 ];
+/************************************************************
+ * HYPERLINK FOR SHEET ID
+ ************************************************************/
+function setSheetLink(range, sheetId) {
+  if (!sheetId) return;
+
+  const url = `https://docs.google.com/spreadsheets/d/${sheetId}`;
+
+  const richText = SpreadsheetApp.newRichTextValue()
+    .setText(sheetId)
+    .setLinkUrl(url)
+    .build();
+
+  range.setRichTextValue(richText);
+}
 
 function syncSettingsFromSheet_() {
   try {
@@ -351,7 +366,10 @@ function createMonthlyTimesheet(monthName = null, year = null, testMode = true) 
       sheetId = ss.getId();
 
       // Write the new sheet ID back to the Master Config Sheet immediately
-      sheetMaster.getRange(emp.rowNum, emp.sheetIdColNum).setValue(sheetId);
+      const cell = sheetMaster.getRange(emp.rowNum, emp.sheetIdColNum);
+
+      cell.setValue(sheetId);
+      setSheetLink(cell, sheetId);
       Logger.log("✓ Saved sheet ID " + sheetId + " for " + emp.name + " in row " + emp.rowNum);
 
       const file = DriveApp.getFileById(sheetId);

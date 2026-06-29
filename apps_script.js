@@ -1143,13 +1143,20 @@ class SheetsVerifier {
     const lastWorkingDayYear = lastWorkingDayDate.getFullYear();
 
     const employees = this.config.employees || [];
-    const tabName = lastWorkingDayMonth + "-" + lastWorkingDayYear; // e.g. June-2026
 
     for (let i = 0; i < employees.length; i++) {
       const emp = employees[i];
       Logger.log("Checking " + emp.name + "'s sheet...");
 
-      const spreadsheetId = emp.sheetId;
+      let spreadsheetId = emp.sheetId;
+      if (typeof getExistingSpreadsheetId_ === "function") {
+        const dynamicId = getExistingSpreadsheetId_(emp.projectName, lastWorkingDayMonth, lastWorkingDayYear);
+        if (dynamicId) {
+          spreadsheetId = dynamicId;
+          Logger.log("Found dynamic spreadsheet ID for " + emp.name + " (" + emp.projectName + ") via Timesheet_Configs: " + spreadsheetId);
+        }
+      }
+
       if (!spreadsheetId) {
         Logger.log("Warning: No Sheet ID found for " + emp.name + ", skipping verification.");
         results.push([emp.name, false]);
@@ -1157,7 +1164,7 @@ class SheetsVerifier {
       }
 
       const sheetData = this.getEngineerSheetData(
-        tabName,
+        emp.name,
         lastWorkingDayMonth,
         spreadsheetId,
       );

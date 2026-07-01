@@ -873,10 +873,10 @@ function setupAlternativeEmployeeSheet_(ss, tabName, dates, empName, projectName
     .setVerticalAlignment("middle");
 
   // Row 3: Title Values
-  sheet.getRange("D3").setValue(projectName || "").setHorizontalAlignment("center");
-  sheet.getRange("E3").setValue(empName).setHorizontalAlignment("center");
-  sheet.getRange("F3").setValue(periodStr).setHorizontalAlignment("center");
-  sheet.getRange("G3").setValue(standardHours).setHorizontalAlignment("center");
+  sheet.getRange("D3").setValue(projectName || "").setHorizontalAlignment("center").setFontWeight("bold");
+  sheet.getRange("E3").setValue(empName).setHorizontalAlignment("center").setFontWeight("bold");
+  sheet.getRange("F3").setValue(periodStr).setHorizontalAlignment("center").setFontWeight("bold");
+  sheet.getRange("G3").setValue(standardHours).setHorizontalAlignment("center").setFontWeight("bold");
 
   const startRow = 6;
   const endRow = 5 + (dates.length * 2);

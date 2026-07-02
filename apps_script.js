@@ -1351,7 +1351,7 @@ class SheetsVerifier {
  */
 function runDailyVerification() {
   if (typeof syncSettingsFromSheet_ === "function") {
-    syncSettingsFromSheet_();
+    syncSettingsFromSheet_(true);
   }
   const verifier = new SheetsVerifier();
   const results = verifier.runDailyVerification();

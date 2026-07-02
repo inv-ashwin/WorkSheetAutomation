@@ -56,7 +56,7 @@ function setSheetLink(range, sheetId) {
   range.setRichTextValue(richText);
 }
 
-function syncSettingsFromSheet_() {
+function syncSettingsFromSheet_(requireWebhooks = false) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) return;
@@ -156,11 +156,13 @@ function syncSettingsFromSheet_() {
   if (!dest || dest.trim() === "" || dest === "YOUR_DESTINATION_FOLDER_ID") {
     throw new Error("Missing Destination Folder ID. Please add the folder ID to the settings in your 'Manager Sheet' to generate the sheet.");
   }
-  if (!managerWebhook || managerWebhook.trim() === "" || managerWebhook === "YOUR_WEBHOOK_URL") {
-    throw new Error("Missing Google Chat Webhook. Please add the webhook URL to the settings in your 'Manager Sheet' to generate the sheet.");
-  }
-  if (!employeeWebhook || employeeWebhook.trim() === "" || employeeWebhook === "YOUR_ALERT_WEBHOOK_URL") {
-    throw new Error("Missing Employee Alert Webhook. Please add the webhook URL to the settings in your 'Manager Sheet' to generate the sheet.");
+  if (requireWebhooks) {
+    if (!managerWebhook || managerWebhook.trim() === "" || managerWebhook === "YOUR_WEBHOOK_URL") {
+      throw new Error("Missing Google Chat Webhook. Please add the webhook URL to the settings in your 'Manager Sheet' to run daily verification.");
+    }
+    if (!employeeWebhook || employeeWebhook.trim() === "" || employeeWebhook === "YOUR_ALERT_WEBHOOK_URL") {
+      throw new Error("Missing Employee Alert Webhook. Please add the webhook URL to the settings in your 'Manager Sheet' to run daily verification.");
+    }
   }
 }
 
